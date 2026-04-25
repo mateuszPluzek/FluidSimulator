@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "4DN2Pxe1p3o=",
+  "dgSpecHash": "7Sy0purDvnk=",
   "success": true,
-  "projectFilePath": "F:\\JETBRAINS\\_Rider\\CODE\\2D-Fluid-Sim\\2DFluidSim\\2DFluidSim\\2DFluidSim.csproj",
+  "projectFilePath": "F:\\JETBRAINS\\_Rider\\CODE\\FluidSim\\FluidSimulator\\2DFluidSim\\2DFluidSim.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\MSI\\.nuget\\packages\\opentk\\5.0.0-pre.15\\opentk.5.0.0-pre.15.nupkg.sha512",
     "C:\\Users\\MSI\\.nuget\\packages\\opentk.audio\\5.0.0-pre.15\\opentk.audio.5.0.0-pre.15.nupkg.sha512",

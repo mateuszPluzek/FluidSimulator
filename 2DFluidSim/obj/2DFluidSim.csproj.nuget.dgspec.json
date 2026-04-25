@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "F:\\JETBRAINS\\_Rider\\CODE\\2D-Fluid-Sim\\2DFluidSim\\2DFluidSim\\2DFluidSim.csproj": {}
+    "F:\\JETBRAINS\\_Rider\\CODE\\FluidSim\\FluidSimulator\\2DFluidSim\\2DFluidSim.csproj": {}
   },
   "projects": {
-    "F:\\JETBRAINS\\_Rider\\CODE\\2D-Fluid-Sim\\2DFluidSim\\2DFluidSim\\2DFluidSim.csproj": {
+    "F:\\JETBRAINS\\_Rider\\CODE\\FluidSim\\FluidSimulator\\2DFluidSim\\2DFluidSim.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "F:\\JETBRAINS\\_Rider\\CODE\\2D-Fluid-Sim\\2DFluidSim\\2DFluidSim\\2DFluidSim.csproj",
+        "projectUniqueName": "F:\\JETBRAINS\\_Rider\\CODE\\FluidSim\\FluidSimulator\\2DFluidSim\\2DFluidSim.csproj",
         "projectName": "2DFluidSim",
-        "projectPath": "F:\\JETBRAINS\\_Rider\\CODE\\2D-Fluid-Sim\\2DFluidSim\\2DFluidSim\\2DFluidSim.csproj",
+        "projectPath": "F:\\JETBRAINS\\_Rider\\CODE\\FluidSim\\FluidSimulator\\2DFluidSim\\2DFluidSim.csproj",
         "packagesPath": "C:\\Users\\MSI\\.nuget\\packages\\",
-        "outputPath": "F:\\JETBRAINS\\_Rider\\CODE\\2D-Fluid-Sim\\2DFluidSim\\2DFluidSim\\obj\\",
+        "outputPath": "F:\\JETBRAINS\\_Rider\\CODE\\FluidSim\\FluidSimulator\\2DFluidSim\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\MSI\\AppData\\Roaming\\NuGet\\NuGet.Config",

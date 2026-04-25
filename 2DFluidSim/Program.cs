@@ -50,7 +50,7 @@ class Program
     
         //static point for test
         Vector3 center = (0.0f, 0.0f, 0.0f);
-        Vector3[] vertices = GenerateCircle(center, 0.01f);
+        Vector3[] vertices = GenerateCircle(center, 0.1f);
         
         // --- Vertex Array Object Setup ---
         //VAO (references objects)
@@ -66,7 +66,9 @@ class Program
         GL.VertexAttribPointer(position, 3, VertexAttribPointerType.Float, false, sizeof(float) * 3, 0);
         
         // --- Camera Setup ---
-
+        Matrix4 projection = Matrix4.CreatePerspectiveFieldOfView(MathHelper.DegreesToRadians(60f), (float)screenWidth / screenHeight, 0.01f, 100.0f);
+        Matrix4 view = Matrix4.LookAt(new Vector3(0, 0, 3), new Vector3(0, 0, 0), new Vector3(0, 1, 0));
+        Matrix4 model = Matrix4.Identity;
         //getting field index
         int viewUniform = GL.GetUniformLocation(shader.Id, "view");
         int projectionUniform = GL.GetUniformLocation(shader.Id, "projection");
@@ -77,6 +79,10 @@ class Program
         {
             // --- Loop Code ---
             GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit); //clearing buffer with color
+            
+            GL.UniformMatrix4f(projectionUniform, 1, true, ref projection);
+            GL.UniformMatrix4f(viewUniform, 1, true, ref view);
+            GL.UniformMatrix4f(modelUniform, 1, true, ref model);
             
             GL.DrawArrays(PrimitiveType.TriangleFan, 0, vertices.Length); //drawing
             
