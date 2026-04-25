@@ -1,0 +1,16 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "2DFluidSim", "2DFluidSim\2DFluidSim.csproj", "{67C01E7D-E44D-4768-9FAE-90DE4A95B87A}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{67C01E7D-E44D-4768-9FAE-90DE4A95B87A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{67C01E7D-E44D-4768-9FAE-90DE4A95B87A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{67C01E7D-E44D-4768-9FAE-90DE4A95B87A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{67C01E7D-E44D-4768-9FAE-90DE4A95B87A}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
