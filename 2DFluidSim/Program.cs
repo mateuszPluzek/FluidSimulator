@@ -49,8 +49,8 @@ class Program
         GL.Enable(EnableCap.DepthTest); //Enables Depth Test for correct rendering
     
         //static point for test
-        Vector3 center = (0.0f, 0.0f, 0.0f);
-        Vector3[] vertices = GenerateCircle(center, 0.1f);
+        FluidParticle test = new FluidParticle();
+        Vector3[] vertices = GenerateCircle(test.StartPosition, 0.1f);
         
         // --- Vertex Array Object Setup ---
         //VAO (references objects)
@@ -68,7 +68,7 @@ class Program
         // --- Camera Setup ---
         Matrix4 projection = Matrix4.CreatePerspectiveFieldOfView(MathHelper.DegreesToRadians(60f), (float)screenWidth / screenHeight, 0.01f, 100.0f);
         Matrix4 view = Matrix4.LookAt(new Vector3(0, 0, 3), new Vector3(0, 0, 0), new Vector3(0, 1, 0));
-        Matrix4 model = Matrix4.Identity;
+        // Matrix4 model = Matrix4.Identity;
         //getting field index
         int viewUniform = GL.GetUniformLocation(shader.Id, "view");
         int projectionUniform = GL.GetUniformLocation(shader.Id, "projection");
@@ -77,6 +77,9 @@ class Program
         // --- Main Loop ---
         while (true)
         {
+            // new center
+            test.CurrentPosition += new Vector3(0.01f, 0, 0);
+            Matrix4 model = Matrix4.CreateTranslation(test.CurrentPosition.X, test.CurrentPosition.Y, 0.0f);
             // --- Loop Code ---
             GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit); //clearing buffer with color
             
