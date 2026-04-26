@@ -41,17 +41,19 @@ class Program
         Toolkit.Window.SetTitle(window, "2D Fluid Sim");
         GL.Viewport(0, 0, screenWidth,screenHeight); //important!!!
         
+        // --- Objects ---
         //Points
         List<FluidParticle> particles = new List<FluidParticle>();
         Random random = new Random();
-
-        for (int i = 0; i < 100; i++)
+        for (int i = 0; i < 20; i++)
         {
             FluidParticle particle = new FluidParticle(new Vector3((float)random.NextDouble() * 4.0f - 2.0f, (float)random.NextDouble() * 4.0f - 2.0f, 0f), 0.05f);
             particles.Add(particle);
         }
         //Single particle vertices at 0,0,0 (origin)
         Vector3[] vertices = GenerateCircle(new Vector3(0, 0, 0), 1.0f);
+        //Bounding Box
+        BoundingBox box = new BoundingBox(-2f, 2f, -2f, 2f);
         
         // --- Setup Code ---
         Shader shader = new Shader(); //shader
@@ -94,6 +96,8 @@ class Program
             
             foreach (var particle in particles) //all particles
             {
+                particle.Update(box);
+                
                 Matrix4 scale = Matrix4.CreateScale(particle.Radius);
                 Matrix4 translate = Matrix4.CreateTranslation(particle.CurrentPosition);
                 Matrix4 model = scale * translate;
