@@ -6,8 +6,8 @@ namespace _2DFluidSim;
 
 class Program
 {
-    public static int screenHeight = 800;
-    public static int screenWidth = 1200;
+    private static int screenHeight = 720;
+    private static int screenWidth = 1280;
     
     static void Main()
     {
@@ -41,16 +41,24 @@ class Program
         Toolkit.Window.SetTitle(window, "2D Fluid Sim");
         GL.Viewport(0, 0, screenWidth,screenHeight); //important!!!
         
+        //Points
+        List<FluidParticle> particles = new List<FluidParticle>();
+        Random random = new Random();
+
+        for (int i = 0; i < 100; i++)
+        {
+            FluidParticle particle = new FluidParticle(new Vector3((float)random.NextDouble() * 4.0f - 2.0f, (float)random.NextDouble() * 4.0f - 2.0f, 0f), 0.05f);
+            particles.Add(particle);
+        }
+        //Single particle vertices at 0,0,0 (origin)
+        Vector3[] vertices = GenerateCircle(new Vector3(0, 0, 0), 1.0f);
+        
         // --- Setup Code ---
         Shader shader = new Shader(); //shader
         shader.Setup();
         shader.Use();
         GL.ClearColor(0.1f, 0.1f, 0.1f, 1.0f); //background
         GL.Enable(EnableCap.DepthTest); //Enables Depth Test for correct rendering
-    
-        //static point for test
-        FluidParticle test = new FluidParticle();
-        Vector3[] vertices = GenerateCircle(test.StartPosition, 0.1f);
         
         // --- Vertex Array Object Setup ---
         //VAO (references objects)
@@ -66,7 +74,7 @@ class Program
         GL.VertexAttribPointer(position, 3, VertexAttribPointerType.Float, false, sizeof(float) * 3, 0);
         
         // --- Camera Setup ---
-        Matrix4 projection = Matrix4.CreatePerspectiveFieldOfView(MathHelper.DegreesToRadians(60f), (float)screenWidth / screenHeight, 0.01f, 100.0f);
+        Matrix4 projection = Matrix4.CreatePerspectiveFieldOfView(MathHelper.DegreesToRadians(60f), (float)screenWidth / screenHeight, 0.01f, 1000.0f);
         Matrix4 view = Matrix4.LookAt(new Vector3(0, 0, 3), new Vector3(0, 0, 0), new Vector3(0, 1, 0));
         // Matrix4 model = Matrix4.Identity;
         //getting field index
@@ -77,17 +85,22 @@ class Program
         // --- Main Loop ---
         while (true)
         {
-            // new center
-            test.CurrentPosition += new Vector3(0.01f, 0, 0);
-            Matrix4 model = Matrix4.CreateTranslation(test.CurrentPosition.X, test.CurrentPosition.Y, 0.0f);
             // --- Loop Code ---
             GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit); //clearing buffer with color
             
             GL.UniformMatrix4f(projectionUniform, 1, true, ref projection);
             GL.UniformMatrix4f(viewUniform, 1, true, ref view);
-            GL.UniformMatrix4f(modelUniform, 1, true, ref model);
+            // GL.UniformMatrix4f(modelUniform, 1, true, ref model);
             
-            GL.DrawArrays(PrimitiveType.TriangleFan, 0, vertices.Length); //drawing
+            foreach (var particle in particles) //all particles
+            {
+                Matrix4 scale = Matrix4.CreateScale(particle.Radius);
+                Matrix4 translate = Matrix4.CreateTranslation(particle.CurrentPosition);
+                Matrix4 model = scale * translate;
+                
+                GL.UniformMatrix4f(modelUniform, 1, true, ref model);
+                GL.DrawArrays(PrimitiveType.TriangleFan, 0, vertices.Length); //drawing
+            }
             
             Toolkit.OpenGL.SwapBuffers(context); //swap back and front buffers
             //Event Handling
