@@ -45,15 +45,15 @@ class Program
         //Points
         List<FluidParticle> particles = new List<FluidParticle>();
         Random random = new Random();
-        for (int i = 0; i < 20; i++)
+        for (int i = 0; i < 100; i++)
         {
-            FluidParticle particle = new FluidParticle(new Vector3((float)random.NextDouble() * 4.0f - 2.0f, (float)random.NextDouble() * 4.0f - 2.0f, 0f), 0.05f);
+            FluidParticle particle = new FluidParticle(new Vector3((float)random.NextDouble() * 4.0f - 2.0f, (float)random.NextDouble() * 4.0f - 3.0f, 0f), 0.05f);
             particles.Add(particle);
         }
         //Single particle vertices at 0,0,0 (origin)
         Vector3[] vertices = GenerateCircle(new Vector3(0, 0, 0), 1.0f);
         //Bounding Box
-        BoundingBox box = new BoundingBox(-2f, 2f, -2f, 2f);
+        BoundingBox box = new BoundingBox(-2f, 2f, -1.5f, 1.5f);
         
         // --- Setup Code ---
         Shader shader = new Shader(); //shader
@@ -93,7 +93,7 @@ class Program
             GL.UniformMatrix4f(projectionUniform, 1, true, ref projection);
             GL.UniformMatrix4f(viewUniform, 1, true, ref view);
             // GL.UniformMatrix4f(modelUniform, 1, true, ref model);
-            
+
             foreach (var particle in particles) //all particles
             {
                 particle.Update(box);
@@ -105,6 +105,7 @@ class Program
                 GL.UniformMatrix4f(modelUniform, 1, true, ref model);
                 GL.DrawArrays(PrimitiveType.TriangleFan, 0, vertices.Length); //drawing
             }
+            // DrawBoundingBox(box, shader.Id, projection, view); Debug
             
             Toolkit.OpenGL.SwapBuffers(context); //swap back and front buffers
             //Event Handling
@@ -131,6 +132,40 @@ class Program
             vertices[i + 1] = new Vector3(x, y, center.Z);
         }
         return vertices;
+    }
+
+    static void DrawBoundingBox(BoundingBox bounds, int shaderId, Matrix4 projection, Matrix4 view)
+    {
+        // Create line vertices for bounding box
+        Vector3[] boxVertices = new Vector3[]
+        {
+            new Vector3(bounds.MinX, bounds.MinY, 0),
+            new Vector3(bounds.MaxX, bounds.MinY, 0),
+            new Vector3(bounds.MaxX, bounds.MaxY, 0),
+            new Vector3(bounds.MinX, bounds.MaxY, 0),
+            new Vector3(bounds.MinX, bounds.MinY, 0) // Close the loop
+        };
+        
+        int boxVAO = GL.GenVertexArray();
+        int boxVBO = GL.GenBuffer();
+        
+        GL.BindVertexArray(boxVAO);
+        GL.BindBuffer(BufferTarget.ArrayBuffer, boxVBO);
+        GL.BufferData(BufferTarget.ArrayBuffer, boxVertices.Length * Vector3.SizeInBytes, 
+            boxVertices, BufferUsage.DynamicDraw);
+        
+        uint position = (uint)GL.GetAttribLocation(shaderId, "vPosition");
+        GL.EnableVertexAttribArray(position);
+        GL.VertexAttribPointer(position, 3, VertexAttribPointerType.Float, false, sizeof(float) * 3, 0);
+        
+        Matrix4 identity = Matrix4.Identity;
+        int modelUniform = GL.GetUniformLocation(shaderId, "model");
+        GL.UniformMatrix4f(modelUniform, 1, true, ref identity);
+        
+        GL.DrawArrays(PrimitiveType.LineStrip, 0, boxVertices.Length);
+        //Clean-up
+        GL.DeleteBuffer(boxVBO);
+        GL.DeleteVertexArray(boxVAO);
     }
 }
 
