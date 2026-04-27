@@ -32,8 +32,8 @@ public class FluidParticle
     private void Setup() //function that sets up simulation value
     {
         //simulation values
-        this.Gravity = 0.01f;
-        this.CollisionDamping = 0.7f;
+        this.Gravity = 0.001f;
+        this.CollisionDamping = 0.8f;
     }
 
     public void Update(BoundingBox boundingBox)

@@ -8,6 +8,7 @@ class Program
 {
     private static int screenHeight = 720;
     private static int screenWidth = 1280;
+    private static int particleAmount = 1000;
     
     static void Main()
     {
@@ -45,7 +46,7 @@ class Program
         //Points
         List<FluidParticle> particles = new List<FluidParticle>();
         Random random = new Random();
-        for (int i = 0; i < 100; i++)
+        for (int i = 0; i < particleAmount; i++)
         {
             FluidParticle particle = new FluidParticle(new Vector3((float)random.NextDouble() * 4.0f - 2.0f, (float)random.NextDouble() * 4.0f - 3.0f, 0f), 0.05f);
             particles.Add(particle);
@@ -53,7 +54,15 @@ class Program
         //Single particle vertices at 0,0,0 (origin)
         Vector3[] vertices = GenerateCircle(new Vector3(0, 0, 0), 1.0f);
         //Bounding Box
-        BoundingBox box = new BoundingBox(-2f, 2f, -1.5f, 1.5f);
+        BoundingBox box = new BoundingBox(-2.5f, 2.5f, -1.5f, 1.5f);
+        Vector3[] boxVertices = new Vector3[]
+        {
+            new Vector3(box.MinX, box.MinY, 0),
+            new Vector3(box.MaxX, box.MinY, 0),
+            new Vector3(box.MaxX, box.MaxY, 0),
+            new Vector3(box.MinX, box.MaxY, 0),
+            new Vector3(box.MinX, box.MinY, 0) // Close the loop
+        };
         
         // --- Setup Code ---
         Shader shader = new Shader(); //shader
@@ -78,7 +87,7 @@ class Program
         // --- Camera Setup ---
         Matrix4 projection = Matrix4.CreatePerspectiveFieldOfView(MathHelper.DegreesToRadians(60f), (float)screenWidth / screenHeight, 0.01f, 1000.0f);
         Matrix4 view = Matrix4.LookAt(new Vector3(0, 0, 3), new Vector3(0, 0, 0), new Vector3(0, 1, 0));
-        // Matrix4 model = Matrix4.Identity;
+        Matrix4 identity = Matrix4.Identity;
         //getting field index
         int viewUniform = GL.GetUniformLocation(shader.Id, "view");
         int projectionUniform = GL.GetUniformLocation(shader.Id, "projection");
@@ -92,8 +101,8 @@ class Program
             
             GL.UniformMatrix4f(projectionUniform, 1, true, ref projection);
             GL.UniformMatrix4f(viewUniform, 1, true, ref view);
-            // GL.UniformMatrix4f(modelUniform, 1, true, ref model);
-
+            
+            GL.BufferData(BufferTarget.ArrayBuffer, vertices.Length * Vector3.SizeInBytes, vertices, BufferUsage.StaticDraw);
             foreach (var particle in particles) //all particles
             {
                 particle.Update(box);
@@ -105,7 +114,9 @@ class Program
                 GL.UniformMatrix4f(modelUniform, 1, true, ref model);
                 GL.DrawArrays(PrimitiveType.TriangleFan, 0, vertices.Length); //drawing
             }
-            // DrawBoundingBox(box, shader.Id, projection, view); Debug
+            GL.UniformMatrix4f(modelUniform, 1, false, ref identity);
+            GL.BufferData(BufferTarget.ArrayBuffer, boxVertices.Length * Vector3.SizeInBytes, boxVertices, BufferUsage.DynamicDraw);
+            GL.DrawArrays(PrimitiveType.LineStrip, 0, boxVertices.Length);
             
             Toolkit.OpenGL.SwapBuffers(context); //swap back and front buffers
             //Event Handling
@@ -132,40 +143,6 @@ class Program
             vertices[i + 1] = new Vector3(x, y, center.Z);
         }
         return vertices;
-    }
-
-    static void DrawBoundingBox(BoundingBox bounds, int shaderId, Matrix4 projection, Matrix4 view)
-    {
-        // Create line vertices for bounding box
-        Vector3[] boxVertices = new Vector3[]
-        {
-            new Vector3(bounds.MinX, bounds.MinY, 0),
-            new Vector3(bounds.MaxX, bounds.MinY, 0),
-            new Vector3(bounds.MaxX, bounds.MaxY, 0),
-            new Vector3(bounds.MinX, bounds.MaxY, 0),
-            new Vector3(bounds.MinX, bounds.MinY, 0) // Close the loop
-        };
-        
-        int boxVAO = GL.GenVertexArray();
-        int boxVBO = GL.GenBuffer();
-        
-        GL.BindVertexArray(boxVAO);
-        GL.BindBuffer(BufferTarget.ArrayBuffer, boxVBO);
-        GL.BufferData(BufferTarget.ArrayBuffer, boxVertices.Length * Vector3.SizeInBytes, 
-            boxVertices, BufferUsage.DynamicDraw);
-        
-        uint position = (uint)GL.GetAttribLocation(shaderId, "vPosition");
-        GL.EnableVertexAttribArray(position);
-        GL.VertexAttribPointer(position, 3, VertexAttribPointerType.Float, false, sizeof(float) * 3, 0);
-        
-        Matrix4 identity = Matrix4.Identity;
-        int modelUniform = GL.GetUniformLocation(shaderId, "model");
-        GL.UniformMatrix4f(modelUniform, 1, true, ref identity);
-        
-        GL.DrawArrays(PrimitiveType.LineStrip, 0, boxVertices.Length);
-        //Clean-up
-        GL.DeleteBuffer(boxVBO);
-        GL.DeleteVertexArray(boxVAO);
     }
 }
 
