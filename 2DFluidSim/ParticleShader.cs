@@ -3,7 +3,7 @@ using OpenTK.Graphics.OpenGL;
 
 namespace _2DFluidSim;
 
-public class Shader
+public class ParticleShader
 {
     public int Id {get; private set;}
 
@@ -27,7 +27,7 @@ public class Shader
 
     void main()
     {
-        fragColor = vec4(1.0);
+        fragColor = vec4(0.113f, 0.454f, 0.870f, 1.0f);
     }";
 
 

@@ -65,33 +65,50 @@ class Program
         };
         
         // --- Setup Code ---
-        Shader shader = new Shader(); //shader
-        shader.Setup();
-        shader.Use();
+        //Particle Shader
+        ParticleShader particleShader = new ParticleShader();
+        particleShader.Setup();
+        //Bounding Shader
+        BoundShader boundShader = new BoundShader();
+        boundShader.Setup();
+        
         GL.ClearColor(0.1f, 0.1f, 0.1f, 1.0f); //background
         GL.Enable(EnableCap.DepthTest); //Enables Depth Test for correct rendering
-        
         // --- Vertex Array Object Setup ---
         //VAO (references objects)
-        int vao = GL.GenVertexArray();
-        GL.BindVertexArray(vao);
+        int particleVao = GL.GenVertexArray();
+        int boundVao = GL.GenVertexArray();
         //VBO (buffer for VAO that stores the actual data)
-        int vbo = GL.GenBuffer();
-        GL.BindBuffer(BufferTarget.ArrayBuffer, vbo);
-        GL.BufferData(BufferTarget.ArrayBuffer, vertices.Length * Vector3.SizeInBytes, vertices, BufferUsage.StaticDraw);
+        int particleVbo = GL.GenBuffer();
+        int boundVbo = GL.GenBuffer();
+        //shaders
+        uint particlePosition = (uint)GL.GetAttribLocation(particleShader.Id, "vPosition"); //getting index of the field from OpenGL
+        uint boundPosition = (uint)GL.GetAttribLocation(boundShader.Id, "vPosition");
         //connecting openGL shaders and vbo
-        uint position = (uint)GL.GetAttribLocation(shader.Id, "vPosition"); //getting index of the field from OpenGL
-        GL.EnableVertexAttribArray(position); //telling openGL that data is coming from VAO
-        GL.VertexAttribPointer(position, 3, VertexAttribPointerType.Float, false, sizeof(float) * 3, 0);
-        
+        //Particle
+        GL.BindVertexArray(particleVao);
+        GL.BindBuffer(BufferTarget.ArrayBuffer, particleVbo);
+        GL.BufferData(BufferTarget.ArrayBuffer, vertices.Length * Vector3.SizeInBytes, vertices, BufferUsage.StaticDraw);
+        GL.VertexAttribPointer(particlePosition, 3, VertexAttribPointerType.Float, false, sizeof(float) * 3, 0);
+        GL.EnableVertexAttribArray(particlePosition); //telling openGL that data is coming from VAO
+        //Bounding box
+        GL.BindVertexArray(boundVao);
+        GL.BindBuffer(BufferTarget.ArrayBuffer, boundVbo);
+        GL.BufferData(BufferTarget.ArrayBuffer, boxVertices.Length * Vector3.SizeInBytes, boxVertices, BufferUsage.StaticDraw);
+        GL.VertexAttribPointer(boundPosition, 3, VertexAttribPointerType.Float, false, sizeof(float) * 3, 0);
+        GL.EnableVertexAttribArray(boundPosition); //telling openGL that data is coming from VAO
         // --- Camera Setup ---
         Matrix4 projection = Matrix4.CreatePerspectiveFieldOfView(MathHelper.DegreesToRadians(60f), (float)screenWidth / screenHeight, 0.01f, 1000.0f);
         Matrix4 view = Matrix4.LookAt(new Vector3(0, 0, 3), new Vector3(0, 0, 0), new Vector3(0, 1, 0));
         Matrix4 identity = Matrix4.Identity;
-        //getting field index
-        int viewUniform = GL.GetUniformLocation(shader.Id, "view");
-        int projectionUniform = GL.GetUniformLocation(shader.Id, "projection");
-        int modelUniform = GL.GetUniformLocation(shader.Id, "model");
+        //getting uniforms index
+        int viewUniformParticle = GL.GetUniformLocation(particleShader.Id, "view");
+        int projectionUniformParticle = GL.GetUniformLocation(particleShader.Id, "projection");
+        int modelUniformParticle = GL.GetUniformLocation(particleShader.Id, "model");
+        
+        int viewUniformBound = GL.GetUniformLocation(boundShader.Id, "view");
+        int projectionUniformBound = GL.GetUniformLocation(boundShader.Id, "projection");
+        int modelUniformBound = GL.GetUniformLocation(boundShader.Id, "model");
         
         // --- Main Loop ---
         while (true)
@@ -99,11 +116,14 @@ class Program
             // --- Loop Code ---
             GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit); //clearing buffer with color
             
-            GL.UniformMatrix4f(projectionUniform, 1, true, ref projection);
-            GL.UniformMatrix4f(viewUniform, 1, true, ref view);
-            
-            GL.BufferData(BufferTarget.ArrayBuffer, vertices.Length * Vector3.SizeInBytes, vertices, BufferUsage.StaticDraw);
-            foreach (var particle in particles) //all particles
+            // --- Rendering Particles ---
+            particleShader.Use(); //Shader for particles
+            GL.BindVertexArray(particleVao); //using correct Vao
+            //Projection info
+            GL.UniformMatrix4f(projectionUniformParticle, 1, true, ref projection);
+            GL.UniformMatrix4f(viewUniformParticle, 1, true, ref view);
+            //Draw every particle
+            foreach (var particle in particles) 
             {
                 particle.Update(box);
                 
@@ -111,11 +131,16 @@ class Program
                 Matrix4 translate = Matrix4.CreateTranslation(particle.CurrentPosition);
                 Matrix4 model = scale * translate;
                 
-                GL.UniformMatrix4f(modelUniform, 1, true, ref model);
+                GL.UniformMatrix4f(modelUniformParticle, 1, true, ref model);
                 GL.DrawArrays(PrimitiveType.TriangleFan, 0, vertices.Length); //drawing
             }
-            GL.UniformMatrix4f(modelUniform, 1, false, ref identity);
-            GL.BufferData(BufferTarget.ArrayBuffer, boxVertices.Length * Vector3.SizeInBytes, boxVertices, BufferUsage.DynamicDraw);
+            // --- Rendering Bounding box ---
+            boundShader.Use(); //Shader for bounding box
+            GL.BindVertexArray(boundVao); //using correct Vao
+            //Projection info
+            GL.UniformMatrix4f(projectionUniformBound, 1, true, ref projection);
+            GL.UniformMatrix4f(viewUniformBound, 1, true, ref view);
+            GL.UniformMatrix4f(modelUniformBound, 1, false, ref identity);
             GL.DrawArrays(PrimitiveType.LineStrip, 0, boxVertices.Length);
             
             Toolkit.OpenGL.SwapBuffers(context); //swap back and front buffers
