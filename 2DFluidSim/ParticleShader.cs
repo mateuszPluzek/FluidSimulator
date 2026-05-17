@@ -24,10 +24,16 @@ public class ParticleShader
     #version 330
     
     out vec4 fragColor;
+    uniform float uSpeed;
 
     void main()
     {
-        fragColor = vec4(0.113f, 0.454f, 0.870f, 1.0f);
+        //base colors
+        vec4 blueSlow = vec4(0.113f, 0.454f, 0.870f, 1.0f);
+        vec4 redFast = vec4(0.950, 0.200, 0.200, 1.0);
+
+        //mixing of colors based on uSpeed
+        fragColor = mix(blueSlow, redFast, clamp(uSpeed, 0.0, 1.0));
     }";
 
 

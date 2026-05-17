@@ -1,6 +1,9 @@
 ﻿using OpenTK.Mathematics;
 using OpenTK.Platform;
 using OpenTK.Graphics.OpenGL;
+using System.Diagnostics;
+using OpenTK.Windowing.Common;
+using MouseMoveEventArgs = OpenTK.Platform.MouseMoveEventArgs;
 
 namespace _2DFluidSim;
 
@@ -8,8 +11,13 @@ class Program
 {
     private static int screenHeight = 720;
     private static int screenWidth = 1280;
-    private static int particleAmount = 1000;
+    private static int particleAmount = 700;
     
+    private static float smoothingRadius = 0.35f;
+    
+    public static float targetDensity = 140.0f;
+    public static float pressureMultiplier = 0.8f;
+    public static float viscosityStrenght = 0.09f;
     static void Main()
     {
         // --- OpenGL Setup ---
@@ -32,7 +40,6 @@ class Program
                     Toolkit.Window.Destroy(window);
                     break;
             }
-               
         }
         EventQueue.EventRaised += HandleEvents;
         
@@ -43,12 +50,12 @@ class Program
         GL.Viewport(0, 0, screenWidth,screenHeight); //important!!!
         
         // --- Objects ---
-        //Points
+        //Fluid particles
         List<FluidParticle> particles = new List<FluidParticle>();
         Random random = new Random();
         for (int i = 0; i < particleAmount; i++)
         {
-            FluidParticle particle = new FluidParticle(new Vector3((float)random.NextDouble() * 4.0f - 2.0f, (float)random.NextDouble() * 4.0f - 3.0f, 0f), 0.05f);
+            FluidParticle particle = new FluidParticle(new Vector3((float)random.NextDouble() * 4.0f - 2.0f, (float)random.NextDouble() * 4.0f - 3.0f, 0f), 0.025f);
             particles.Add(particle);
         }
         //Single particle vertices at 0,0,0 (origin)
@@ -105,17 +112,50 @@ class Program
         int viewUniformParticle = GL.GetUniformLocation(particleShader.Id, "view");
         int projectionUniformParticle = GL.GetUniformLocation(particleShader.Id, "projection");
         int modelUniformParticle = GL.GetUniformLocation(particleShader.Id, "model");
+        int speedUniformParticle = GL.GetUniformLocation(particleShader.Id, "uSpeed");
         
         int viewUniformBound = GL.GetUniformLocation(boundShader.Id, "view");
         int projectionUniformBound = GL.GetUniformLocation(boundShader.Id, "projection");
         int modelUniformBound = GL.GetUniformLocation(boundShader.Id, "model");
         
+        // --- Delta time ---
+        //calculating FPS and delta time for smooth simulation
+        Stopwatch stopwatch = new Stopwatch();
+        stopwatch.Start();
+        float lastTime = 0f;
+        //FPS variable
+        float fpsTimer = 0f;
+        int frameCount = 0;
         // --- Main Loop ---
         while (true)
         {
+            // --- DELTA TIME ---
+            // Calculating Delta Time
+            float currentTime = (float)stopwatch.Elapsed.TotalSeconds;
+            float dt = currentTime - lastTime;
+            lastTime = currentTime;
+            // Cap for safety
+            if (dt > 0.1f) dt = 0.1f;
+            //FPS calculation
+            fpsTimer += dt;
+            frameCount++;
+            if (fpsTimer >= 0.5f) // Update the console every 0.5 seconds
+            {
+                float fps = frameCount / fpsTimer;
+                Toolkit.Window.SetTitle(window,  $"2D Fluid Sim | FPS: {fps:F0}");
+                // Console.WriteLine($"FPS: {fps:F0}"); DEBUG MODE
+                fpsTimer = 0f;
+                frameCount = 0;
+            }
+            
             // --- Loop Code ---
             GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit); //clearing buffer with color
             
+            //calculating density for all particles
+            foreach (var particle in particles)
+            {
+                particle.UpdateDensity(particles);
+            }
             // --- Rendering Particles ---
             particleShader.Use(); //Shader for particles
             GL.BindVertexArray(particleVao); //using correct Vao
@@ -125,7 +165,14 @@ class Program
             //Draw every particle
             foreach (var particle in particles) 
             {
-                particle.Update(box);
+                //calculating simulation
+                particle.UpdatePosition(box, particles, dt);
+                
+                //calculating speed for color
+                float speed = particle.Velocity.Length;
+                float maxExpectedSpeed = 5.0f; 
+                float normalizedSpeed = speed / maxExpectedSpeed;
+                GL.Uniform1f(speedUniformParticle, normalizedSpeed);
                 
                 Matrix4 scale = Matrix4.CreateScale(particle.Radius);
                 Matrix4 translate = Matrix4.CreateTranslation(particle.CurrentPosition);
@@ -143,6 +190,7 @@ class Program
             GL.UniformMatrix4f(modelUniformBound, 1, false, ref identity);
             GL.DrawArrays(PrimitiveType.LineStrip, 0, boxVertices.Length);
             
+            
             Toolkit.OpenGL.SwapBuffers(context); //swap back and front buffers
             //Event Handling
             Toolkit.Window.ProcessEvents(false);
@@ -153,7 +201,7 @@ class Program
         }
     }
 
-    public static Vector3[] GenerateCircle(Vector3 center, float radius, int segments = 32)
+    static Vector3[] GenerateCircle(Vector3 center, float radius, int segments = 32)
     {
         Vector3 [] vertices = new Vector3[segments + 2];
         //Center point
@@ -169,5 +217,97 @@ class Program
         }
         return vertices;
     }
+    
+    // === density calcualtions ===
+    public static float SmoothingKernel(float radius, float dst)
+    {
+        if (dst >= radius) return 0;
+        
+        float volume = (Single.Pi * float.Pow(radius, 4)) / 6;
+        return (radius - dst) * (radius - dst) / volume;
+    }
+    //derivative of smoothing kernel used for getting the slope
+    public static float SmoothingKernelDerivative(float radius, float dst)
+    {
+        if (dst >= radius) return 0;
+
+        float scale = 12 / (float.Pow(radius, 4) * Single.Pi);
+        return (dst - radius) * scale;
+    }
+
+    public static float CalculateDensity(Vector3 samplePoint, List<FluidParticle> particles)
+    {
+        float density = 0.0f;
+        //TODO optimize by only looking at particles in the radius (lookup and grid)
+        foreach (FluidParticle particle in particles)
+        {
+            float dst = (particle.CurrentPosition - samplePoint).Length;
+            float influence = SmoothingKernel(smoothingRadius, dst);
+            density += particle.Mass * influence;
+        }
+        return density;
+    }
+    // === pressure calculations ===
+    public static float ConvertDensityToPressure(float density)
+    {
+        float densityError = density - targetDensity;
+        float pressure = float.Max(0, densityError) * pressureMultiplier;
+        return pressure;
+    }
+    
+    // gradient calculations (how to change density)
+    public static Vector3 CalculatePressureForce(FluidParticle currentParticle, List<FluidParticle> particles)
+    {
+        Vector3 pressureForce = Vector3.Zero;
+        Vector3 samplePoint = currentParticle.CurrentPosition;
+
+        // Calculate the pressure of the current particle itself
+        float currentPressure = ConvertDensityToPressure(currentParticle.Density);
+
+        foreach (FluidParticle neighbor in particles)
+        {
+            if (neighbor == currentParticle) continue; // Skip self
+            Vector3 offset = neighbor.CurrentPosition - samplePoint;
+            float dst = offset.Length;
+            if (dst >= smoothingRadius || dst == 0.0f) continue; //skip if outiside smoothing radius
+            Vector3 dir = offset / dst;
+
+            float slope = SmoothingKernelDerivative(smoothingRadius, dst);
+
+            float neighborPressure = ConvertDensityToPressure(neighbor.Density);
+            float sharedPressure = (currentPressure + neighborPressure) / 2.0f;
+            float neighborDensity = neighbor.Density <= 0.001f ? 0.001f : neighbor.Density;
+
+            pressureForce += dir * slope * sharedPressure * neighbor.Mass / neighborDensity;
+        }
+
+        return pressureForce;
+    }
+    
+    // === viscosity calculations ===
+    public static float ViscositySmoothingKernel(float radius, float dst)
+    {
+        if (dst >= radius) return 0;
+
+        float volume = Single.Pi * float.Pow(radius, 8) / 4;
+        float value = float.Max(0, radius * radius - dst * dst);
+        return value * value * value / volume;
+    }
+    public static Vector3 CalculateViscosityForce(FluidParticle currentParticle, List<FluidParticle> particles)
+    {
+        Vector3 viscosityForce = Vector3.Zero;
+        Vector3 samplePoint = currentParticle.CurrentPosition;
+        
+        foreach (FluidParticle neighbor in particles)
+        {
+            if (neighbor == currentParticle) continue; // Skip self
+            float dst = (samplePoint - neighbor.CurrentPosition).Length;
+            if (dst >= smoothingRadius || dst == 0.0f) continue;
+            float influence = ViscositySmoothingKernel(smoothingRadius, dst);
+            viscosityForce += (neighbor.Velocity - currentParticle.Velocity) * influence;
+        }
+        return viscosityForce * viscosityStrenght;
+    }
+
 }
 
