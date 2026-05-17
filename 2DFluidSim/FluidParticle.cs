@@ -59,7 +59,7 @@ public class FluidParticle
         this.Velocity += viscosityAcceleration * dt;
         
         //linear damping
-        this.Velocity += -this.Velocity * 3.0f * dt;
+        this.Velocity += -this.Velocity * 2.0f * dt;
         
         this.CurrentPosition += Velocity * dt;
         
