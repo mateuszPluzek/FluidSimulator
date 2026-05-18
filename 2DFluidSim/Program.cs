@@ -31,6 +31,12 @@ class Program
         //Binding context to the Window
         Toolkit.OpenGL.SetCurrentContext(context);
         OpenTK.Graphics.GLLoader.LoadBindings(Toolkit.OpenGL.GetBindingsContext(context));
+        // --- Camera Setup ---
+        Toolkit.Window.GetClientSize(window, out Vector2i clientSize);
+        Camera camera = new Camera((float)clientSize.X / clientSize.Y);
+        CursorHandle defaultCursor = Toolkit.Cursor.Create(SystemCursorType.Default);
+        bool grabbed = false;
+        Vector2 last = Vector2.Zero; // vector that stores last mouse position
         //event queue
         void HandleEvents(PalHandle? handle, PlatformEventType type, EventArgs args)
         {
@@ -39,6 +45,37 @@ class Program
                 case CloseEventArgs closeEvent:
                     Toolkit.Window.Destroy(window);
                     break;
+                case MouseMoveEventArgs mouseMove:
+                    Vector2 diff = mouseMove.ClientPosition - last;
+                    if(grabbed) camera.Look(diff / 1000f);
+                    last = mouseMove.ClientPosition;
+                    break;
+                case KeyDownEventArgs keyDown:
+                    if(keyDown.IsRepeat) break;
+                    switch (keyDown.Scancode)
+                    {
+                        case Scancode.LeftAlt:
+                            Toolkit.Window.SetCursorCaptureMode(window, CursorCaptureMode.Locked);
+                            Toolkit.Window.SetCursor(window, null);
+                            grabbed = false;
+                            break;
+                        case Scancode.W: camera.Move((1f, 0f, 0f)); break;
+                        case Scancode.S: camera.Move((-1f, 0f, 0f)); break;
+                        case Scancode.A: camera.Move((0, 1f, 0f)); break;
+                        case Scancode.D: camera.Move((0, -1f, 0f)); break;
+                    }
+                    break;
+                case KeyUpEventArgs keyUp:
+                    switch (keyUp.Scancode)
+                    {
+                        case Scancode.LeftAlt:
+                            Toolkit.Window.SetCursorCaptureMode(window, CursorCaptureMode.Normal);
+                            Toolkit.Window.SetCursor(window, defaultCursor);
+                            grabbed = true;
+                            break;
+                    }
+                    break;
+                
             }
         }
         EventQueue.EventRaised += HandleEvents;
@@ -48,7 +85,6 @@ class Program
         Toolkit.Window.SetSize(window, new Vector2i(screenWidth,screenHeight));
         Toolkit.Window.SetTitle(window, "2D Fluid Sim");
         GL.Viewport(0, 0, screenWidth,screenHeight); //important!!!
-        
         // --- Objects ---
         //Fluid particles
         List<FluidParticle> particles = new List<FluidParticle>();
@@ -104,9 +140,7 @@ class Program
         GL.BufferData(BufferTarget.ArrayBuffer, boxVertices.Length * Vector3.SizeInBytes, boxVertices, BufferUsage.StaticDraw);
         GL.VertexAttribPointer(boundPosition, 3, VertexAttribPointerType.Float, false, sizeof(float) * 3, 0);
         GL.EnableVertexAttribArray(boundPosition); //telling openGL that data is coming from VAO
-        // --- Camera Setup ---
-        Matrix4 projection = Matrix4.CreatePerspectiveFieldOfView(MathHelper.DegreesToRadians(60f), (float)screenWidth / screenHeight, 0.01f, 1000.0f);
-        Matrix4 view = Matrix4.LookAt(new Vector3(0, 0, 3), new Vector3(0, 0, 0), new Vector3(0, 1, 0));
+        //Identity matrix for perspective
         Matrix4 identity = Matrix4.Identity;
         //getting uniforms index
         int viewUniformParticle = GL.GetUniformLocation(particleShader.Id, "view");
@@ -160,8 +194,8 @@ class Program
             particleShader.Use(); //Shader for particles
             GL.BindVertexArray(particleVao); //using correct Vao
             //Projection info
-            GL.UniformMatrix4f(projectionUniformParticle, 1, true, ref projection);
-            GL.UniformMatrix4f(viewUniformParticle, 1, true, ref view);
+            GL.UniformMatrix4f(projectionUniformParticle, 1, true, camera.Projection);
+            GL.UniformMatrix4f(viewUniformParticle, 1, true, camera.View);
             //Draw every particle
             foreach (var particle in particles) 
             {
@@ -185,8 +219,8 @@ class Program
             boundShader.Use(); //Shader for bounding box
             GL.BindVertexArray(boundVao); //using correct Vao
             //Projection info
-            GL.UniformMatrix4f(projectionUniformBound, 1, true, ref projection);
-            GL.UniformMatrix4f(viewUniformBound, 1, true, ref view);
+            GL.UniformMatrix4f(projectionUniformBound, 1, true, camera.Projection);
+            GL.UniformMatrix4f(viewUniformBound, 1, true, camera.View);
             GL.UniformMatrix4f(modelUniformBound, 1, false, ref identity);
             GL.DrawArrays(PrimitiveType.LineStrip, 0, boxVertices.Length);
             
