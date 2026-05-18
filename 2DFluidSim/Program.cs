@@ -3,7 +3,6 @@ using OpenTK.Platform;
 using OpenTK.Graphics.OpenGL;
 using System.Diagnostics;
 using OpenTK.Windowing.Common;
-using MouseMoveEventArgs = OpenTK.Platform.MouseMoveEventArgs;
 
 namespace _2DFluidSim;
 
@@ -13,11 +12,45 @@ class Program
     private static int screenWidth = 1280;
     private static int particleAmount = 300;
     
-    private static float smoothingRadius = 0.4f;
+    private static float smoothingRadius = 0.45f;
     
-    public static float targetDensity = 80.0f;
-    public static float pressureMultiplier = 5.0f;
-    public static float viscosityStrenght = 0.09f;
+    public static float targetDensity = 190.0f;
+    public static float pressureMultiplier = 0.9f;
+    public static float viscosityStrength = 0.05f;
+    
+    // Rolling telemetry metrics
+    private static int teleportCount = 0;
+    private static float telemetryTimer = 0f;
+    private static int telemetryIntervalsCount = 0;
+    private static int totalTeleportedAllTime = 0;
+    
+    // Simulation Flow Modes
+    private static bool isContinuousStream = true; 
+    private static bool triggerNewWave = false;
+    
+    static public void ResetSimulation(PipeGeometry p, List<FluidParticle> pList, int vboId, Vector3[] currentVertices)
+    {
+        Random rand = new Random();
+        pList.Clear();
+        for (int i = 0; i < particleAmount; i++)
+        {
+            float spawnX = (float)rand.NextDouble() * (p.PipeWidth - 0.06f) + p.LeftWall + 0.03f;
+            float spawnY = (float)rand.NextDouble() * 0.8f + (p.TopEntrance - 1.0f);
+            pList.Add(new FluidParticle(new Vector3(spawnX, spawnY, 0f), 0.025f));
+        }
+    
+        // Reload the VBO buffer on the GPU to match the new shape outlines
+        GL.BindBuffer(BufferTarget.ArrayBuffer, vboId);
+        GL.BufferData(BufferTarget.ArrayBuffer, currentVertices.Length * Vector3.SizeInBytes, currentVertices, BufferUsage.StaticDraw);
+    
+        // Clear metrics
+        teleportCount = 0;
+        telemetryTimer = 0f;
+        telemetryIntervalsCount = 0;
+        totalTeleportedAllTime = 0;
+        Console.Clear();
+        Console.WriteLine($"Sim Reset -> Switched to Pipe Profile: {p.Type}");
+    }
     static void Main()
     {
         // --- OpenGL Setup ---
@@ -31,13 +64,55 @@ class Program
         //Binding context to the Window
         Toolkit.OpenGL.SetCurrentContext(context);
         OpenTK.Graphics.GLLoader.LoadBindings(Toolkit.OpenGL.GetBindingsContext(context));
+        
+        PipeGeometry pipe = new PipeGeometry();
+        Vector3[] boxVertices = pipe.GetVisualVertices();
+        List<FluidParticle> particles = new List<FluidParticle>();
+        
+        int boundVbo = GL.GenBuffer();
+        
         //event queue
         void HandleEvents(PalHandle? handle, PlatformEventType type, EventArgs args)
         {
             switch (args)
             {
-                case CloseEventArgs closeEvent:
+                case CloseEventArgs:
                     Toolkit.Window.Destroy(window);
+                    break;
+
+                case OpenTK.Platform.KeyDownEventArgs keyEvent:
+                    // Mode Switching Via Number Keys
+                    PipeType? selectedType = keyEvent.Key switch
+                    {
+                        Key.D1 => PipeType.SharpL,
+                        Key.D2 => PipeType.MiteredL,
+                        Key.D3 => PipeType.CurvedL,
+                        Key.D4 => PipeType.DiagonalDrop,
+                        _ => null
+                    };
+
+                    if (selectedType.HasValue)
+                    {
+                        pipe.ChangeType(selectedType.Value);
+                        boxVertices = pipe.GetVisualVertices();
+                        ResetSimulation(pipe, particles, boundVbo, boxVertices);
+                    }
+
+                    // --- NEW: SPACEBAR TOGGLE LOGIC ---
+                    if (keyEvent.Key == Key.Space)
+                    {
+                        isContinuousStream = !isContinuousStream;
+                        
+                        if (isContinuousStream)
+                        {
+                            Console.WriteLine(">> Flow Mode Changed: CONSTANT STREAM");
+                        }
+                        else
+                        {
+                            Console.WriteLine(">> Flow Mode Changed: SINGLE WAVE (Spawning Wave...)");
+                            triggerNewWave = true; 
+                        }
+                    }
                     break;
             }
         }
@@ -50,26 +125,17 @@ class Program
         GL.Viewport(0, 0, screenWidth,screenHeight); //important!!!
         
         // --- Objects ---
-        //Fluid particles
-        List<FluidParticle> particles = new List<FluidParticle>();
         Random random = new Random();
         for (int i = 0; i < particleAmount; i++)
         {
-            FluidParticle particle = new FluidParticle(new Vector3((float)random.NextDouble() * 4.0f - 2.0f, (float)random.NextDouble() * 4.0f - 3.0f, 0f), 0.025f);
+            float spawnX = (float)random.NextDouble() * (pipe.PipeWidth - 0.06f) + pipe.LeftWall + 0.03f;
+            float spawnY = (float)random.NextDouble() * 0.8f + (pipe.TopEntrance - 1.0f); 
+    
+            FluidParticle particle = new FluidParticle(new Vector3(spawnX, spawnY, 0f), 0.025f);
             particles.Add(particle);
         }
-        //Single particle vertices at 0,0,0 (origin)
+        
         Vector3[] vertices = GenerateCircle(new Vector3(0, 0, 0), 1.0f);
-        //Bounding Box
-        BoundingBox box = new BoundingBox(-2.5f, 2.5f, -1.5f, 1.5f);
-        Vector3[] boxVertices = new Vector3[]
-        {
-            new Vector3(box.MinX, box.MinY, 0),
-            new Vector3(box.MaxX, box.MinY, 0),
-            new Vector3(box.MaxX, box.MaxY, 0),
-            new Vector3(box.MinX, box.MaxY, 0),
-            new Vector3(box.MinX, box.MinY, 0) // Close the loop
-        };
         
         // --- Setup Code ---
         //Particle Shader
@@ -87,7 +153,6 @@ class Program
         int boundVao = GL.GenVertexArray();
         //VBO (buffer for VAO that stores the actual data)
         int particleVbo = GL.GenBuffer();
-        int boundVbo = GL.GenBuffer();
         //shaders
         uint particlePosition = (uint)GL.GetAttribLocation(particleShader.Id, "vPosition"); //getting index of the field from OpenGL
         uint boundPosition = (uint)GL.GetAttribLocation(boundShader.Id, "vPosition");
@@ -151,6 +216,19 @@ class Program
             // --- Loop Code ---
             GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit); //clearing buffer with color
             
+            // --- WAVE INJECTION RESET HANDLING ---
+            if (triggerNewWave)
+            {
+                particles.Clear();
+                for (int i = 0; i < particleAmount; i++)
+                {
+                    float spawnX = (float)random.NextDouble() * (pipe.PipeWidth - 0.06f) + pipe.LeftWall + 0.03f;
+                    float spawnY = (float)random.NextDouble() * 0.8f + (pipe.TopEntrance - 1.0f); 
+                    particles.Add(new FluidParticle(new Vector3(spawnX, spawnY, 0f), 0.025f));
+                }
+                triggerNewWave = false;
+            }
+            
             //calculating density for all particles
             foreach (var particle in particles)
             {
@@ -163,14 +241,39 @@ class Program
             GL.UniformMatrix4f(projectionUniformParticle, 1, true, ref projection);
             GL.UniformMatrix4f(viewUniformParticle, 1, true, ref view);
             //Draw every particle
-            foreach (var particle in particles) 
+// We loop backward so we can safely delete elements on exit during Single Wave mode
+            for (int i = particles.Count - 1; i >= 0; i--)
             {
-                //calculating simulation
-                particle.UpdatePosition(box, particles, dt);
+                var particle = particles[i];
                 
-                //calculating speed for color
+                // Calculate physical properties & integrate position
+                particle.UpdatePosition(pipe, particles, dt);
+                
+                // --- TELEPORT / DELETION BOUNDARY THRESHOLD ---
+                if (particle.CurrentPosition.X >= pipe.RightExit - particle.Radius)
+                {
+                    if (isContinuousStream)
+                    {
+                        // Constant Stream Mode: Recycle back to the upper chimney intake
+                        float spawnX = (float)random.NextDouble() * (pipe.PipeWidth - 0.06f) + pipe.LeftWall + 0.03f;
+                        float spawnY = (float)random.NextDouble() * 0.8f + (pipe.TopEntrance - 1.0f); 
+        
+                        particle.CurrentPosition = new Vector3(spawnX, spawnY, 0f);
+                        particle.Velocity = Vector3.Zero; 
+                        particle.Density = 0f;
+                        teleportCount++;
+                    }
+                    else
+                    {
+                        // Single Wave Mode: Cleanly purge particle from simulation space
+                        particles.RemoveAt(i);
+                        continue;
+                    }
+                }
+                
+                // Draw remaining active particles
                 float speed = particle.Velocity.Length;
-                float maxExpectedSpeed = 5.0f; 
+                float maxExpectedSpeed = 3.0f; 
                 float normalizedSpeed = speed / maxExpectedSpeed;
                 GL.Uniform1f(speedUniformParticle, normalizedSpeed);
                 
@@ -179,7 +282,7 @@ class Program
                 Matrix4 model = scale * translate;
                 
                 GL.UniformMatrix4f(modelUniformParticle, 1, true, ref model);
-                GL.DrawArrays(PrimitiveType.TriangleFan, 0, vertices.Length); //drawing
+                GL.DrawArrays(PrimitiveType.TriangleFan, 0, vertices.Length);
             }
             // --- Rendering Bounding box ---
             boundShader.Use(); //Shader for bounding box
@@ -197,6 +300,25 @@ class Program
             if (Toolkit.Window.IsWindowDestroyed(window))
             {
                 break;
+            }
+            // --- Telemetry Reporting System ---
+            telemetryTimer += dt;
+            if (telemetryTimer >= 5.0f)
+            {
+                telemetryIntervalsCount++;
+                totalTeleportedAllTime += teleportCount;
+    
+                // Calculate historical average across all 5-second snapshots
+                float historicalAverage = (float)totalTeleportedAllTime / telemetryIntervalsCount;
+    
+                Console.WriteLine("--------------------------------------------------");
+                Console.WriteLine($"[Snapshot] Last 5 Seconds Flow: {teleportCount} particles");
+                Console.WriteLine($"[Metrics] Running Average Flow Rate: {historicalAverage:F2} particles / 5s");
+                Console.WriteLine("--------------------------------------------------");
+
+                // Reset loop count and subtract the interval time to maintain precision
+                teleportCount = 0;
+                telemetryTimer -= 5.0f; 
             }
         }
     }
@@ -306,7 +428,7 @@ class Program
             float influence = ViscositySmoothingKernel(smoothingRadius, dst);
             viscosityForce += (neighbor.Velocity - currentParticle.Velocity) * influence;
         }
-        return viscosityForce * viscosityStrenght;
+        return viscosityForce * viscosityStrength;
     }
 
 }

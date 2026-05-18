@@ -44,7 +44,7 @@ public class FluidParticle
         this.Density = Program.CalculateDensity(this.CurrentPosition, particles);
     }
     
-    public void UpdatePosition(BoundingBox boundingBox, List<FluidParticle> particles, float dt)
+    public void UpdatePosition(PipeGeometry pipe, List<FluidParticle> particles, float dt)
     {
         // Gravity
         this.Velocity += new Vector3(0f, -1f, 0f) * Gravity * dt;
@@ -64,7 +64,118 @@ public class FluidParticle
         this.CurrentPosition += Velocity * dt;
         
         //bounding box
-        this.ResolveCollision(boundingBox);
+        this.ResolveGenericPipeCollision(pipe);
+    }
+    
+private void ResolveGenericPipeCollision(PipeGeometry pipe)
+    {
+        Vector3 pos = this.CurrentPosition;
+        Vector3 vel = this.Velocity;
+
+        // --- GLOBAL BOUNDS (Universal Entrance, Exit & Absolute Floor) ---
+        if (pos.X - this.Radius < pipe.LeftWall) { pos.X = pipe.LeftWall + this.Radius; vel.X = Math.Abs(vel.X) * this.CollisionDamping; }
+        if (pos.Y - this.Radius < pipe.Floor) { pos.Y = pipe.Floor + this.Radius; vel.Y = Math.Abs(vel.Y) * this.CollisionDamping; }
+        if (pos.Y + this.Radius > pipe.TopEntrance) { pos.Y = pipe.TopEntrance - this.Radius; vel.Y = -Math.Abs(vel.Y) * this.CollisionDamping; }
+
+        // --- SHAPE SPECIFIC WALL LOGIC ---
+        if (pipe.Type == PipeType.SharpL)
+        {
+            if (pos.Y + this.Radius > pipe.InnerHorizontalWall && pos.X + this.Radius > pipe.InnerVerticalWall)
+            {
+                pos.X = pipe.InnerVerticalWall - this.Radius; vel.X = -Math.Abs(vel.X) * this.CollisionDamping;
+            }
+            else if (pos.X >= pipe.InnerVerticalWall && pos.Y + this.Radius > pipe.InnerHorizontalWall)
+            {
+                pos.Y = pipe.InnerHorizontalWall - this.Radius; vel.Y = -Math.Abs(vel.Y) * this.CollisionDamping;
+            }
+        }
+        else if (pipe.Type == PipeType.MiteredL)
+        {
+            // 45 degree outer chamfer wall constraint
+            float outerChamferLine = (pos.X - pipe.LeftWall) + (pos.Y - pipe.Floor);
+            if (outerChamferLine < 0.5f) {
+                float normalX = 0.7071f; float normalY = 0.7071f;
+                float penetration = 0.5f - outerChamferLine;
+                pos.X += normalX * (penetration + this.Radius); pos.Y += normalY * (penetration + this.Radius);
+                vel = (vel - 2 * Vector3.Dot(vel, new Vector3(normalX, normalY, 0)) * new Vector3(normalX, normalY, 0)) * this.CollisionDamping;
+            }
+            // Inner vertical/horizontal constraints
+            if (pos.Y > pipe.InnerHorizontalWall + 0.3f && pos.X + this.Radius > pipe.InnerVerticalWall) { pos.X = pipe.InnerVerticalWall - this.Radius; vel.X = -Math.Abs(vel.X) * this.CollisionDamping; }
+            if (pos.X > pipe.InnerVerticalWall + 0.3f && pos.Y + this.Radius > pipe.InnerHorizontalWall) { pos.Y = pipe.InnerHorizontalWall - this.Radius; vel.Y = -Math.Abs(vel.Y) * this.CollisionDamping; }
+            // Inner corner chamfer constraint
+            if (pos.X > pipe.InnerVerticalWall && pos.Y > pipe.InnerHorizontalWall) {
+                float innerChamferLine = (pos.X - pipe.InnerVerticalWall) + (pos.Y - pipe.InnerHorizontalWall);
+                if (innerChamferLine > 0.3f) {
+                    pos.X -= 0.01f; pos.Y -= 0.01f; vel *= -this.CollisionDamping;
+                }
+            }
+        }
+        else if (pipe.Type == PipeType.CurvedL)
+        {
+            // Outer bend circle radius collision
+            Vector3 outerCenter = new Vector3(pipe.LeftWall + 0.6f, pipe.Floor + 0.6f, 0);
+            float outerDist = (pos - outerCenter).Length;
+            if (pos.X < outerCenter.X && pos.Y < outerCenter.Y && outerDist > 0.6f) {
+                Vector3 normal = (outerCenter - pos).Normalized();
+                pos = outerCenter - normal * (0.6f - this.Radius);
+                vel = (vel - 2 * Vector3.Dot(vel, normal) * normal) * this.CollisionDamping;
+            }
+            // Inner bend circle radius collision
+            Vector3 innerCenter = new Vector3(pipe.InnerVerticalWall, pipe.InnerHorizontalWall, 0);
+            float innerDist = (pos - innerCenter).Length;
+            if (pos.X > innerCenter.X && pos.Y > innerCenter.Y && innerDist < 0.05f) {
+                Vector3 normal = (pos - innerCenter).Normalized();
+                pos = innerCenter + normal * (0.05f + this.Radius);
+                vel = (vel - 2 * Vector3.Dot(vel, normal) * normal) * this.CollisionDamping;
+            }
+            // Straight bounding portions
+            if (pos.Y > innerCenter.Y && pos.X + this.Radius > pipe.InnerVerticalWall) { pos.X = pipe.InnerVerticalWall - this.Radius; vel.X = -Math.Abs(vel.X) * this.CollisionDamping; }
+            if (pos.X > innerCenter.X && pos.Y + this.Radius > pipe.InnerHorizontalWall) { pos.Y = pipe.InnerHorizontalWall - this.Radius; vel.Y = -Math.Abs(vel.Y) * this.CollisionDamping; }
+        }
+else if (pipe.Type == PipeType.DiagonalDrop)
+        {
+            float optOuterRadius = 1.1f;
+            // FIXED: Using a shared center for both outer and inner concentric rings
+            Vector3 optCenter = new Vector3(pipe.LeftWall + optOuterRadius, pipe.Floor + optOuterRadius, 0f);
+
+            // --- ZONE 1: VERTICAL INTAKE CHUTE ---
+            if (pos.Y > optCenter.Y)
+            {
+                if (pos.X - this.Radius < pipe.LeftWall) { pos.X = pipe.LeftWall + this.Radius; vel.X = Math.Abs(vel.X) * this.CollisionDamping; }
+                if (pos.X + this.Radius > pipe.InnerVerticalWall) { pos.X = pipe.InnerVerticalWall - this.Radius; vel.X = -Math.Abs(vel.X) * this.CollisionDamping; }
+            }
+            // --- ZONE 2: HORIZONTAL OUTLET ---
+            else if (pos.X > optCenter.X)
+            {
+                if (pos.Y - this.Radius < pipe.Floor) { pos.Y = pipe.Floor + this.Radius; vel.Y = Math.Abs(vel.Y) * this.CollisionDamping; }
+                if (pos.Y + this.Radius > pipe.InnerHorizontalWall) { pos.Y = pipe.InnerHorizontalWall - this.Radius; vel.Y = -Math.Abs(vel.Y) * this.CollisionDamping; }
+            }
+            // --- ZONE 3: EXPANED SMOOTH RADIUS BEND CORNER ---
+            else
+            {
+                // Outer Curved Boundary Handling
+                float outerDist = (pos - optCenter).Length;
+                if (outerDist > optOuterRadius - this.Radius)
+                {
+                    Vector3 normal = (optCenter - pos).Normalized();
+                    pos = optCenter - normal * (optOuterRadius - this.Radius);
+                    vel = (vel - 2 * Vector3.Dot(vel, normal) * normal) * this.CollisionDamping;
+                }
+
+                // Inner Curved Boundary Handling
+                float optInnerRadius = optOuterRadius - pipe.PipeWidth; // 0.5f Radius channel clearance
+                float innerDist = (pos - optCenter).Length;
+                if (innerDist < optInnerRadius + this.Radius)
+                {
+                    Vector3 normal = (pos - optCenter).Normalized();
+                    pos = optCenter + normal * (optInnerRadius + this.Radius);
+                    vel = (vel - 2 * Vector3.Dot(vel, normal) * normal) * this.CollisionDamping;
+                }
+            }
+        }
+
+        this.Velocity = vel;
+        this.CurrentPosition = pos;
     }
 
     private void ResolveCollision(BoundingBox bounds)
@@ -82,6 +193,7 @@ public class FluidParticle
             resolvedPosition.X = bounds.MaxX - this.Radius;
             resolvedVelocity.X = -Math.Abs(resolvedVelocity.X) * this.CollisionDamping;
         }
+
         //Top bottom
         if (this.CurrentPosition.Y - this.Radius < bounds.MinY) //Bottom collision
         {
@@ -93,13 +205,9 @@ public class FluidParticle
             resolvedPosition.Y = bounds.MaxY - this.Radius;
             resolvedVelocity.Y = -Math.Abs(resolvedVelocity.Y) * this.CollisionDamping;
         }
-        
+
         this.Velocity = resolvedVelocity;
         this.CurrentPosition = resolvedPosition;
     }
 
-
-    
-    
-    
 }
