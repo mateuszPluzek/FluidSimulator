@@ -11,13 +11,13 @@ class Program
 {
     private static int screenHeight = 720;
     private static int screenWidth = 1280;
-    private static int particleAmount = 700;
+    private static int particleAmount = 600;
     
-    private static float smoothingRadius = 0.35f;
+    private static float smoothingRadius = 0.45f;
     
-    public static float targetDensity = 140.0f;
-    public static float pressureMultiplier = 0.8f;
-    public static float viscosityStrenght = 0.09f;
+    public static float targetDensity = 160.0f;
+    public static float pressureMultiplier = 0.9f;
+    public static float viscosityStrength = 0.05f;
     static void Main()
     {
         // --- OpenGL Setup ---
@@ -170,7 +170,7 @@ class Program
                 
                 //calculating speed for color
                 float speed = particle.Velocity.Length;
-                float maxExpectedSpeed = 5.0f; 
+                float maxExpectedSpeed = 3.0f; 
                 float normalizedSpeed = speed / maxExpectedSpeed;
                 GL.Uniform1f(speedUniformParticle, normalizedSpeed);
                 
@@ -306,7 +306,7 @@ class Program
             float influence = ViscositySmoothingKernel(smoothingRadius, dst);
             viscosityForce += (neighbor.Velocity - currentParticle.Velocity) * influence;
         }
-        return viscosityForce * viscosityStrenght;
+        return viscosityForce * viscosityStrength;
     }
 
 }
