@@ -11,13 +11,13 @@ class Program
 {
     private static int screenHeight = 720;
     private static int screenWidth = 1280;
-    private static int particleAmount = 600;
+    private static int particleAmount = 700;
     
-    private static float smoothingRadius = 0.45f;
+    private static float smoothingRadius = 0.5f;
     
-    public static float targetDensity = 160.0f;
+    public static float targetDensity = 15.0f;
     public static float pressureMultiplier = 0.9f;
-    public static float viscosityStrength = 0.05f;
+    public static float viscosityStrength = 0.045f;
     static void Main()
     {
         // --- OpenGL Setup ---
@@ -31,12 +31,27 @@ class Program
         //Binding context to the Window
         Toolkit.OpenGL.SetCurrentContext(context);
         OpenTK.Graphics.GLLoader.LoadBindings(Toolkit.OpenGL.GetBindingsContext(context));
+        //window options
+        Toolkit.Window.SetMode(window, WindowMode.Normal); //Setting window mode to normal
+        Toolkit.Window.SetSize(window, new Vector2i(screenWidth,screenHeight));
+        Toolkit.Window.SetTitle(window, "2D Fluid Sim");
+        GL.Viewport(0, 0, screenWidth,screenHeight); //important!!!
         // --- Camera Setup ---
         Toolkit.Window.GetClientSize(window, out Vector2i clientSize);
         Camera camera = new Camera((float)clientSize.X / clientSize.Y);
         CursorHandle defaultCursor = Toolkit.Cursor.Create(SystemCursorType.Default);
         bool grabbed = false;
         Vector2 last = Vector2.Zero; // vector that stores last mouse position
+        // --- movement map ---
+        Dictionary<Scancode, bool> keysPressed = new Dictionary<Scancode, bool>()
+        {
+            { Scancode.W, false },
+            { Scancode.S, false },
+            { Scancode.A, false },
+            { Scancode.D, false },
+            { Scancode.Q, false },
+            { Scancode.E, false }
+        };
         //event queue
         void HandleEvents(PalHandle? handle, PlatformEventType type, EventArgs args)
         {
@@ -45,33 +60,44 @@ class Program
                 case CloseEventArgs closeEvent:
                     Toolkit.Window.Destroy(window);
                     break;
+                
                 case MouseMoveEventArgs mouseMove:
                     Vector2 diff = mouseMove.ClientPosition - last;
-                    if(grabbed) camera.Look(diff / 1000f);
+                    if (grabbed)
+                    {
+                        camera.Look(diff / 1000f);
+                    }
                     last = mouseMove.ClientPosition;
                     break;
+                
                 case KeyDownEventArgs keyDown:
                     if(keyDown.IsRepeat) break;
+                    if (keysPressed.ContainsKey(keyDown.Scancode))
+                    {
+                        keysPressed[keyDown.Scancode] = true;
+                    }
                     switch (keyDown.Scancode)
                     {
                         case Scancode.LeftAlt:
                             Toolkit.Window.SetCursorCaptureMode(window, CursorCaptureMode.Locked);
                             Toolkit.Window.SetCursor(window, null);
-                            grabbed = false;
+                            grabbed = true;
                             break;
-                        case Scancode.W: camera.Move((1f, 0f, 0f)); break;
-                        case Scancode.S: camera.Move((-1f, 0f, 0f)); break;
-                        case Scancode.A: camera.Move((0, 1f, 0f)); break;
-                        case Scancode.D: camera.Move((0, -1f, 0f)); break;
                     }
                     break;
+                
                 case KeyUpEventArgs keyUp:
+                    if (keysPressed.ContainsKey(keyUp.Scancode))
+                    {
+                        keysPressed[keyUp.Scancode] = false;
+                    }
+
                     switch (keyUp.Scancode)
                     {
                         case Scancode.LeftAlt:
                             Toolkit.Window.SetCursorCaptureMode(window, CursorCaptureMode.Normal);
                             Toolkit.Window.SetCursor(window, defaultCursor);
-                            grabbed = true;
+                            grabbed = false;
                             break;
                     }
                     break;
@@ -80,32 +106,56 @@ class Program
         }
         EventQueue.EventRaised += HandleEvents;
         
-        //window options
-        Toolkit.Window.SetMode(window, WindowMode.Normal); //Setting window mode to normal
-        Toolkit.Window.SetSize(window, new Vector2i(screenWidth,screenHeight));
-        Toolkit.Window.SetTitle(window, "2D Fluid Sim");
-        GL.Viewport(0, 0, screenWidth,screenHeight); //important!!!
         // --- Objects ---
+        //Bounding Box
+        BoundingBox3D box = new BoundingBox3D(-2.0f, 2.0f, -1.0f, 1.0f, -1.5f, 1.5f);
+        Vector3[] boxVertices = new Vector3[]
+        {
+            // Bottom 
+            new Vector3(box.MinX, box.MinY, box.MinZ),
+            new Vector3(box.MaxX, box.MinY, box.MinZ),
+            new Vector3(box.MaxX, box.MinY, box.MaxZ),
+            new Vector3(box.MinX, box.MinY, box.MaxZ),
+            new Vector3(box.MinX, box.MinY, box.MinZ),
+            //Connect top from bottom
+            new Vector3(box.MinX, box.MaxY, box.MinZ),
+            // Top
+            new Vector3(box.MaxX, box.MaxY, box.MinZ),
+            new Vector3(box.MaxX, box.MaxY, box.MaxZ),
+            new Vector3(box.MinX, box.MaxY, box.MaxZ),
+            new Vector3(box.MinX, box.MaxY, box.MinZ),
+            //Rest
+            new Vector3(box.MaxX, box.MaxY, box.MinZ),
+            new Vector3(box.MaxX, box.MinY, box.MinZ),
+            new Vector3(box.MaxX, box.MinY, box.MaxZ),
+            new Vector3(box.MaxX, box.MaxY, box.MaxZ),
+            new Vector3(box.MinX, box.MaxY, box.MaxZ),
+            new Vector3(box.MinX, box.MinY, box.MaxZ)
+        };
         //Fluid particles
         List<FluidParticle> particles = new List<FluidParticle>();
         Random random = new Random();
+        // Spawning volume
+        float spawnMinX = box.MinX + 0.2f; 
+        float spawnMaxX = box.MinX + 1.2f; 
+        float spawnMinY = box.MaxY - 1.0f;
+        float spawnMaxY = box.MaxY - 0.1f;
+        float spawnMinZ = box.MinZ + 0.3f; 
+        float spawnMaxZ = box.MaxZ - 0.3f; 
         for (int i = 0; i < particleAmount; i++)
         {
-            FluidParticle particle = new FluidParticle(new Vector3((float)random.NextDouble() * 4.0f - 2.0f, (float)random.NextDouble() * 4.0f - 3.0f, 0f), 0.025f);
+            // Generate a random position constrained entirely within the upper-left sub-box
+            float randomX = spawnMinX + (float)random.NextDouble() * (spawnMaxX - spawnMinX);
+            float randomY = spawnMinY + (float)random.NextDouble() * (spawnMaxY - spawnMinY);
+            float randomZ = spawnMinZ + (float)random.NextDouble() * (spawnMaxZ - spawnMinZ); 
+
+            FluidParticle particle = new FluidParticle(new Vector3(randomX, randomY, randomZ), 0.05f);
             particles.Add(particle);
         }
-        //Single particle vertices at 0,0,0 (origin)
-        Vector3[] vertices = GenerateCircle(new Vector3(0, 0, 0), 1.0f);
-        //Bounding Box
-        BoundingBox box = new BoundingBox(-2.5f, 2.5f, -1.5f, 1.5f);
-        Vector3[] boxVertices = new Vector3[]
-        {
-            new Vector3(box.MinX, box.MinY, 0),
-            new Vector3(box.MaxX, box.MinY, 0),
-            new Vector3(box.MaxX, box.MaxY, 0),
-            new Vector3(box.MinX, box.MaxY, 0),
-            new Vector3(box.MinX, box.MinY, 0) // Close the loop
-        };
+        //Single particle sphere
+        var sphereData = GenerateSphere(1.0f, 16, 16);
+        Vector3[] vertices = sphereData.Vertices;
+        uint[] indices = sphereData.Indices;
         
         // --- Setup Code ---
         //Particle Shader
@@ -124,6 +174,8 @@ class Program
         //VBO (buffer for VAO that stores the actual data)
         int particleVbo = GL.GenBuffer();
         int boundVbo = GL.GenBuffer();
+        //EBO (index buffer for spheres)
+        int particleEbo = GL.GenBuffer();
         //shaders
         uint particlePosition = (uint)GL.GetAttribLocation(particleShader.Id, "vPosition"); //getting index of the field from OpenGL
         uint boundPosition = (uint)GL.GetAttribLocation(boundShader.Id, "vPosition");
@@ -134,6 +186,9 @@ class Program
         GL.BufferData(BufferTarget.ArrayBuffer, vertices.Length * Vector3.SizeInBytes, vertices, BufferUsage.StaticDraw);
         GL.VertexAttribPointer(particlePosition, 3, VertexAttribPointerType.Float, false, sizeof(float) * 3, 0);
         GL.EnableVertexAttribArray(particlePosition); //telling openGL that data is coming from VAO
+        
+        GL.BindBuffer(BufferTarget.ElementArrayBuffer, particleEbo);
+        GL.BufferData(BufferTarget.ElementArrayBuffer, indices.Length * sizeof(uint), indices, BufferUsage.StaticDraw);
         //Bounding box
         GL.BindVertexArray(boundVao);
         GL.BindBuffer(BufferTarget.ArrayBuffer, boundVbo);
@@ -181,6 +236,20 @@ class Program
                 fpsTimer = 0f;
                 frameCount = 0;
             }
+            // --- Camera movement ---
+            Vector3 moveDirection = Vector3.Zero;
+            if (keysPressed[Scancode.W]) moveDirection += new Vector3(0f, 0f, 1f);
+            if (keysPressed[Scancode.S]) moveDirection += new Vector3(0f, 0f, -1f);
+            if (keysPressed[Scancode.D]) moveDirection += new Vector3(-1f, 0f, 0f);
+            if (keysPressed[Scancode.A]) moveDirection += new Vector3(1f, 0f, 0f);
+            if (keysPressed[Scancode.Q]) moveDirection += new Vector3(0f, 1f, 0f);
+            if (keysPressed[Scancode.E]) moveDirection += new Vector3(0f, -1f, 0f);
+
+            if (moveDirection != Vector3.Zero)
+            {
+                // Adjust the multiplier value (e.g., 4.0f) to make the fly speed faster or slower
+                camera.Move(moveDirection * (4.0f * dt)); 
+            }
             
             // --- Loop Code ---
             GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit); //clearing buffer with color
@@ -213,7 +282,7 @@ class Program
                 Matrix4 model = scale * translate;
                 
                 GL.UniformMatrix4f(modelUniformParticle, 1, true, ref model);
-                GL.DrawArrays(PrimitiveType.TriangleFan, 0, vertices.Length); //drawing
+                GL.DrawElements(PrimitiveType.Triangles, indices.Length, DrawElementsType.UnsignedInt, 0); //drawing
             }
             // --- Rendering Bounding box ---
             boundShader.Use(); //Shader for bounding box
@@ -234,22 +303,57 @@ class Program
             }
         }
     }
-
-    static Vector3[] GenerateCircle(Vector3 center, float radius, int segments = 32)
+    
+    static (Vector3[] Vertices, uint[] Indices) GenerateSphere(float radius, int sectors = 16, int rings = 16)
     {
-        Vector3 [] vertices = new Vector3[segments + 2];
-        //Center point
-        vertices[0] = center;
-        //Points around the circle
-        float angleStep = 2 * MathF.PI / segments;
-        for (int i = 0; i <= segments; i++)
+        List<Vector3> vertices = new List<Vector3>();
+        List<uint> indices = new List<uint>();
+
+        float lengthInv = 1.0f / radius;
+        float sectorStep = 2 * MathF.PI / sectors;
+        float ringStep = MathF.PI / rings;
+
+        for (int i = 0; i <= rings; ++i)
         {
-            float angle = angleStep * i;
-            float x = center.X + radius * MathF.Cos(angle);
-            float y = center.Y + radius * MathF.Sin(angle);
-            vertices[i + 1] = new Vector3(x, y, center.Z);
+            float ringAngle = MathF.PI / 2 - i * ringStep; // starting from pi/2 to -pi/2
+            float xy = radius * MathF.Cos(ringAngle);    // r * cos(u)
+            float z = radius * MathF.Sin(ringAngle);     // r * sin(u)
+
+            for (int j = 0; j <= sectors; ++j)
+            {
+                float sectorAngle = j * sectorStep;      // starting from 0 to 2pi
+
+                float x = xy * MathF.Cos(sectorAngle);   // r * cos(u) * cos(v)
+                float y = xy * MathF.Sin(sectorAngle);   // r * cos(u) * sin(v)
+                vertices.Add(new Vector3(x, y, z));
+            }
         }
-        return vertices;
+
+        for (int i = 0; i < rings; ++i)
+        {
+            uint k1 = (uint)(i * (sectors + 1));     // beginning of current ring
+            uint k2 = (uint)(k1 + sectors + 1);      // beginning of next ring
+
+            for (int j = 0; j < sectors; ++j, ++k1, ++k2)
+            {
+                // 2 triangles per sector except for the top and bottom poles
+                if (i != 0)
+                {
+                    indices.Add(k1);
+                    indices.Add(k2);
+                    indices.Add(k1 + 1);
+                }
+
+                if (i != (rings - 1))
+                {
+                    indices.Add(k1 + 1);
+                    indices.Add(k2);
+                    indices.Add(k2 + 1);
+                }
+            }
+        }
+
+        return (vertices.ToArray(), indices.ToArray());
     }
     
     // === density calcualtions ===
@@ -257,16 +361,16 @@ class Program
     {
         if (dst >= radius) return 0;
         
-        float volume = (Single.Pi * float.Pow(radius, 4)) / 6;
-        return (radius - dst) * (radius - dst) / volume;
+        float volume = (Single.Pi * float.Pow(radius, 5)) / 10f;
+        return (radius - dst) * (radius - dst) * (radius - dst) / volume;
     }
     //derivative of smoothing kernel used for getting the slope
     public static float SmoothingKernelDerivative(float radius, float dst)
     {
         if (dst >= radius) return 0;
-
-        float scale = 12 / (float.Pow(radius, 4) * Single.Pi);
-        return (dst - radius) * scale;
+        
+        float scale = 30f / (float.Pow(radius, 5) * Single.Pi);
+        return -((radius - dst) * (radius - dst)) * scale;
     }
 
     public static float CalculateDensity(Vector3 samplePoint, List<FluidParticle> particles)
@@ -323,9 +427,8 @@ class Program
     {
         if (dst >= radius) return 0;
 
-        float volume = Single.Pi * float.Pow(radius, 8) / 4;
-        float value = float.Max(0, radius * radius - dst * dst);
-        return value * value * value / volume;
+        float volume = (2f * Single.Pi * float.Pow(radius, 5)) / 15f;
+        return (radius - dst) / volume;
     }
     public static Vector3 CalculateViscosityForce(FluidParticle currentParticle, List<FluidParticle> particles)
     {

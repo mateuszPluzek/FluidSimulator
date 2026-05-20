@@ -35,7 +35,7 @@ public class FluidParticle
         //simulation values
         this.CurrentPosition = StartPosition;
         this.Gravity = 9.81f;
-        this.CollisionDamping = 0.95f;
+        this.CollisionDamping = 0.75f;
         this.Density = 0.0f;
         this.Mass = 1.0f;
     }
@@ -44,7 +44,7 @@ public class FluidParticle
         this.Density = Program.CalculateDensity(this.CurrentPosition, particles);
     }
     
-    public void UpdatePosition(BoundingBox boundingBox, List<FluidParticle> particles, float dt)
+    public void UpdatePosition(BoundingBox3D boundingBox, List<FluidParticle> particles, float dt)
     {
         // Gravity
         this.Velocity += new Vector3(0f, -1f, 0f) * Gravity * dt;
@@ -67,39 +67,46 @@ public class FluidParticle
         this.ResolveCollision(boundingBox);
     }
 
-    private void ResolveCollision(BoundingBox bounds)
+    private void ResolveCollision(BoundingBox3D bounds)
     {
         Vector3 resolvedPosition = this.CurrentPosition;
         Vector3 resolvedVelocity = this.Velocity;
-        //Left Right
-        if (this.CurrentPosition.X - this.Radius < bounds.MinX) //Left collision
+        // --- Left / Right (X-Axis) ---
+        if (this.CurrentPosition.X - this.Radius < bounds.MinX) // Left collision
         {
             resolvedPosition.X = bounds.MinX + this.Radius;
             resolvedVelocity.X = Math.Abs(resolvedVelocity.X) * this.CollisionDamping;
         }
-        else if (this.CurrentPosition.X + this.Radius > bounds.MaxX) //Right collision
+        else if (this.CurrentPosition.X + this.Radius > bounds.MaxX) // Right collision
         {
             resolvedPosition.X = bounds.MaxX - this.Radius;
             resolvedVelocity.X = -Math.Abs(resolvedVelocity.X) * this.CollisionDamping;
         }
-        //Top bottom
-        if (this.CurrentPosition.Y - this.Radius < bounds.MinY) //Bottom collision
+        // --- Top / Bottom (Y-Axis) ---
+        if (this.CurrentPosition.Y - this.Radius < bounds.MinY) // Bottom collision
         {
             resolvedPosition.Y = bounds.MinY + this.Radius;
             resolvedVelocity.Y = Math.Abs(resolvedVelocity.Y) * this.CollisionDamping;
         }
-        else if (this.CurrentPosition.Y + this.Radius > bounds.MaxY) //Top collision
+        else if (this.CurrentPosition.Y + this.Radius > bounds.MaxY) // Top collision
         {
             resolvedPosition.Y = bounds.MaxY - this.Radius;
             resolvedVelocity.Y = -Math.Abs(resolvedVelocity.Y) * this.CollisionDamping;
+        }
+        // --- Front / Back (Z-Axis) ---
+        if (this.CurrentPosition.Z - this.Radius < bounds.MinZ) // Back collision
+        {
+            resolvedPosition.Z = bounds.MinZ + this.Radius;
+            resolvedVelocity.Z = Math.Abs(resolvedVelocity.Z) * this.CollisionDamping;
+        }
+        else if (this.CurrentPosition.Z + this.Radius > bounds.MaxZ) // Front collision
+        {
+            resolvedPosition.Z = bounds.MaxZ - this.Radius;
+            resolvedVelocity.Z = -Math.Abs(resolvedVelocity.Z) * this.CollisionDamping;
         }
         
         this.Velocity = resolvedVelocity;
         this.CurrentPosition = resolvedPosition;
     }
 
-
-    
-    
-    
 }

@@ -2,19 +2,20 @@
 
 namespace _2DFluidSim;
 
-public class BoundingBox
+public class BoundingBox3D
 {
     public float MinX { get; set; }
     public float MaxX { get; set; }
     public float MinY { get; set; }
     public float MaxY { get; set; }
+    public float MinZ { get; set; }
+    public float MaxZ { get; set; }
     
-    public BoundingBox(float minX, float maxX, float minY, float maxY)
+    public BoundingBox3D(float minX, float maxX, float minY, float maxY, float minZ, float maxZ)
     {
-        MinX = minX;
-        MaxX = maxX;
-        MinY = minY;
-        MaxY = maxY;
+        MinX = minX; MaxX = maxX;
+        MinY = minY; MaxY = maxY;
+        MinZ = minZ; MaxZ = maxZ;
     }
     
     public bool Contains(Vector3 position, float radius)

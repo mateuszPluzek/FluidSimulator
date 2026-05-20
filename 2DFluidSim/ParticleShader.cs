@@ -14,15 +14,23 @@ public class ParticleShader
      uniform mat4 projection;
      uniform mat4 view;
      uniform mat4 model;
+    //tracking variables
+     out vec3 fNormal;
+     out vec3 fFragPos;
 
      void main() 
      {
+        fNormal = normalize(mat3(model) * vPosition);
+        fFragPos = vec3(vec4(vPosition, 1.0) * model);
         gl_Position = vec4(vPosition, 1.0) * model * view * projection;
      }";
 
     private string fragmentShaderSource = @"
     #version 330
     
+    in vec3 fNormal;
+    in vec3 fFragPos;
+
     out vec4 fragColor;
     uniform float uSpeed;
 
@@ -31,9 +39,22 @@ public class ParticleShader
         //base colors
         vec4 slow = vec4(0.171f, 0.95f, 0.21f, 1.0f);
         vec4 fast = vec4(1.0f, 0.03f, 0.03f, 1.0);
+        vec3 baseColor = mix(slow, fast, clamp(uSpeed, 0.0, 1.0)).rgb; //mixing of colors based on uSpeed
+        //light config
+        vec3 lightPos = vec3(5.0, 8.0, 6.0);
+        vec3 lightColor = vec3(1.0, 1.0, 1.0); // Clean white light
+        //ambient light
+        float ambientStrength = 0.25;
+        vec3 ambient = ambientStrength * lightColor;
+        //light diffusion
+        vec3 norm = normalize(fNormal);
+        vec3 lightDir = normalize(lightPos - fFragPos);
+        float diff = max(dot(norm, lightDir), 0.0);
+        vec3 diffuse = diff * lightColor;
 
-        //mixing of colors based on uSpeed
-        fragColor = mix(slow, fast, clamp(uSpeed, 0.0, 1.0));
+        //final color
+        vec3 finalLighting = (ambient + diffuse) * baseColor;
+        fragColor = vec4(finalLighting, 1.0);
     }";
 
 
