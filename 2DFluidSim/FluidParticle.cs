@@ -41,7 +41,7 @@ public class FluidParticle
     }
     public void UpdateDensity(List<FluidParticle> particles)
     {
-        this.Density = Program.CalculateDensity(this.CurrentPosition, particles);
+        this.Density = Program.CalculateDensity(this.CurrentPosition);
     }
     
     public void UpdatePosition(BoundingBox3D boundingBox, List<FluidParticle> particles, float dt)
@@ -50,11 +50,11 @@ public class FluidParticle
         this.Velocity += new Vector3(0f, -1f, 0f) * Gravity * dt;
 
         // Pressure based on the density
-        Vector3 pressureForce = Program.CalculatePressureForce(this, particles);
+        Vector3 pressureForce = Program.CalculatePressureForce(this);
         Vector3 pressureAcceleration = pressureForce / this.Mass;
         this.Velocity += pressureAcceleration * dt;
         
-        Vector3 viscosityForce = Program.CalculateViscosityForce(this, particles);
+        Vector3 viscosityForce = Program.CalculateViscosityForce(this);
         Vector3 viscosityAcceleration = viscosityForce / this.Mass;
         this.Velocity += viscosityAcceleration * dt;
         

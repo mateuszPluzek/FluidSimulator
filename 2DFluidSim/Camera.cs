@@ -20,7 +20,7 @@ public class Camera
 
     public Camera(float aspectRatio)
     {
-        _position = new Vector3(0f, 0.5f, 5.0f);
+        _position = new Vector3(0f, 0.5f, 7.0f);
         _yaw = 0f;
         _pitch = 0f;
         

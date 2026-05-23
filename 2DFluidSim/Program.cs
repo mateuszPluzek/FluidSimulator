@@ -11,13 +11,16 @@ class Program
 {
     private static int screenHeight = 720;
     private static int screenWidth = 1280;
-    private static int particleAmount = 700;
+    private static int particleAmount = 4000;
     
     private static float smoothingRadius = 0.5f;
     
-    public static float targetDensity = 15.0f;
+    public static float targetDensity = 25.0f;
     public static float pressureMultiplier = 0.9f;
     public static float viscosityStrength = 0.045f;
+    
+    // Spatial Hash Grid For Determining particles cell
+    private static Dictionary<Vector3i, List<FluidParticle>> spatialGrid = new();
     static void Main()
     {
         // --- OpenGL Setup ---
@@ -108,7 +111,7 @@ class Program
         
         // --- Objects ---
         //Bounding Box
-        BoundingBox3D box = new BoundingBox3D(-2.0f, 2.0f, -1.0f, 1.0f, -1.5f, 1.5f);
+        BoundingBox3D box = new BoundingBox3D(-2.5f, 2.5f, -3.0f, 3.0f, -4.0f, 4.0f);
         Vector3[] boxVertices = new Vector3[]
         {
             // Bottom 
@@ -227,24 +230,10 @@ class Program
             if (dt > 0.1f) dt = 0.1f;
             //FPS calculation
             frameTimer.Restart();
-            // --- Camera movement ---
-            Vector3 moveDirection = Vector3.Zero;
-            if (keysPressed[Scancode.W]) moveDirection += new Vector3(0f, 0f, 1f);
-            if (keysPressed[Scancode.S]) moveDirection += new Vector3(0f, 0f, -1f);
-            if (keysPressed[Scancode.D]) moveDirection += new Vector3(-1f, 0f, 0f);
-            if (keysPressed[Scancode.A]) moveDirection += new Vector3(1f, 0f, 0f);
-            if (keysPressed[Scancode.Q]) moveDirection += new Vector3(0f, 1f, 0f);
-            if (keysPressed[Scancode.E]) moveDirection += new Vector3(0f, -1f, 0f);
-
-            if (moveDirection != Vector3.Zero)
-            {
-                // Adjust the multiplier value (e.g., 4.0f) to make the fly speed faster or slower
-                camera.Move(moveDirection * (4.0f * dt)); 
-            }
-            
             // --- Loop Code ---
-            GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit); //clearing buffer with color
-            
+            //GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit); //clearing buffer with color
+            //Updating particles cell location
+            UpdateSpatialGrid(particles);
             //calculating density for all particles
             foreach (var particle in particles)
             {
@@ -260,8 +249,7 @@ class Program
             foreach (var particle in particles) 
             {
                 //calculating simulation
-                particle.UpdatePosition(box, particles, dt);
-                
+                particle.UpdatePosition(box, particles, dt);/*
                 //calculating speed for color
                 float speed = particle.Velocity.Length;
                 float maxExpectedSpeed = 3.0f; 
@@ -273,21 +261,20 @@ class Program
                 Matrix4 model = scale * translate;
                 
                 GL.UniformMatrix4f(modelUniformParticle, 1, true, ref model);
-                GL.DrawElements(PrimitiveType.Triangles, indices.Length, DrawElementsType.UnsignedInt, 0); //drawing
+                GL.DrawElements(PrimitiveType.Triangles, indices.Length, DrawElementsType.UnsignedInt, 0); //drawing*/
             }
             //Time elapsed
             frameTimer.Stop();
             double frameTimeMs = frameTimer.Elapsed.TotalMilliseconds;
             double instantFps = frameTimeMs > 0.0 ? 1000.0 / frameTimeMs : 99999.0;
-            //Print time
+            //--- Print FPS ---
             titleUpdateTimer += dt;
             if (titleUpdateTimer >= 0.1f)
             {
                 Toolkit.Window.SetTitle(window, $"Time: {frameTimeMs:F3} ms | Instant FPS: {instantFps:F0}");
                 Console.WriteLine($"Time: {frameTimeMs:F3} ms | Instant FPS: {instantFps:F0}");
                 titleUpdateTimer = 0f;
-            }
-            
+            }/*
             // --- Rendering Bounding box ---
             boundShader.Use(); //Shader for bounding box
             GL.BindVertexArray(boundVao); //using correct Vao
@@ -297,7 +284,21 @@ class Program
             GL.UniformMatrix4f(modelUniformBound, 1, false, ref identity);
             GL.DrawArrays(PrimitiveType.LineStrip, 0, boxVertices.Length);
             
-            Toolkit.OpenGL.SwapBuffers(context); //swap back and front buffers
+            Toolkit.OpenGL.SwapBuffers(context); //swap back and front buffers*/
+            // --- Camera movement ---
+            Vector3 moveDirection = Vector3.Zero;
+            if (keysPressed[Scancode.W]) moveDirection += new Vector3(0f, 0f, 1f);
+            if (keysPressed[Scancode.S]) moveDirection += new Vector3(0f, 0f, -1f);
+            if (keysPressed[Scancode.D]) moveDirection += new Vector3(-1f, 0f, 0f);
+            if (keysPressed[Scancode.A]) moveDirection += new Vector3(1f, 0f, 0f);
+            if (keysPressed[Scancode.Q]) moveDirection += new Vector3(0f, 1f, 0f);
+            if (keysPressed[Scancode.E]) moveDirection += new Vector3(0f, -1f, 0f);
+
+            if (moveDirection != Vector3.Zero)
+            {
+                // Adjust the multiplier value (e.g., 4.0f) to make the fly speed faster or slower
+                camera.Move(moveDirection * (4.0f * dt)); 
+            }
             //Event Handling
             Toolkit.Window.ProcessEvents(false);
             if (Toolkit.Window.IsWindowDestroyed(window))
@@ -358,7 +359,53 @@ class Program
 
         return (vertices.ToArray(), indices.ToArray());
     }
+    // === Spatial Grid Code ===
+    private static void UpdateSpatialGrid(List<FluidParticle> particles)
+    {
+        spatialGrid.Clear();
+        foreach (var particle in particles)
+        {
+            Vector3i cellKey = GetCellKey(particle.CurrentPosition);
+            if (!spatialGrid.TryGetValue(cellKey, out var cellList))
+            {
+                cellList = new List<FluidParticle>();
+                spatialGrid[cellKey] = cellList;
+            }
+            cellList.Add(particle);
+        }
+    }
     
+    public static Vector3i GetCellKey(Vector3 position)
+    {
+        return new Vector3i(
+            (int)MathF.Floor(position.X / smoothingRadius),
+            (int)MathF.Floor(position.Y / smoothingRadius),
+            (int)MathF.Floor(position.Z / smoothingRadius)
+        );
+    }
+    
+    public static List<FluidParticle> GetNearbyNeighbors(Vector3 position)
+    {
+        List<FluidParticle> neighbors = new List<FluidParticle>();
+        Vector3i centerKey = GetCellKey(position);
+
+        // Check 3x3x3 space around home cell
+        for (int x = -1; x <= 1; x++)
+        {
+            for (int y = -1; y <= 1; y++)
+            {
+                for (int z = -1; z <= 1; z++)
+                {
+                    Vector3i targetKey = new Vector3i(centerKey.X + x, centerKey.Y + y, centerKey.Z + z);
+                    if (spatialGrid.TryGetValue(targetKey, out var cellParticles))
+                    {
+                        neighbors.AddRange(cellParticles);
+                    }
+                }
+            }
+        }
+        return neighbors;
+    }
     // === density calcualtions ===
     public static float SmoothingKernel(float radius, float dst)
     {
@@ -376,11 +423,11 @@ class Program
         return -((radius - dst) * (radius - dst)) * scale;
     }
 
-    public static float CalculateDensity(Vector3 samplePoint, List<FluidParticle> particles)
+    public static float CalculateDensity(Vector3 samplePoint)
     {
         float density = 0.0f;
-        //TODO optimize by only looking at particles in the radius (lookup and grid)
-        foreach (FluidParticle particle in particles)
+        var neighbours = GetNearbyNeighbors(samplePoint);
+        foreach (FluidParticle particle in neighbours)
         {
             float dst = (particle.CurrentPosition - samplePoint).Length;
             float influence = SmoothingKernel(smoothingRadius, dst);
@@ -397,7 +444,7 @@ class Program
     }
     
     // gradient calculations (how to change density)
-    public static Vector3 CalculatePressureForce(FluidParticle currentParticle, List<FluidParticle> particles)
+    public static Vector3 CalculatePressureForce(FluidParticle currentParticle)
     {
         Vector3 pressureForce = Vector3.Zero;
         Vector3 samplePoint = currentParticle.CurrentPosition;
@@ -405,7 +452,8 @@ class Program
         // Calculate the pressure of the current particle itself
         float currentPressure = ConvertDensityToPressure(currentParticle.Density);
 
-        foreach (FluidParticle neighbor in particles)
+        var neighbors = GetNearbyNeighbors(samplePoint);
+        foreach (FluidParticle neighbor in neighbors)
         {
             if (neighbor == currentParticle) continue; // Skip self
             Vector3 offset = neighbor.CurrentPosition - samplePoint;
@@ -433,12 +481,13 @@ class Program
         float volume = (2f * Single.Pi * float.Pow(radius, 5)) / 15f;
         return (radius - dst) / volume;
     }
-    public static Vector3 CalculateViscosityForce(FluidParticle currentParticle, List<FluidParticle> particles)
+    public static Vector3 CalculateViscosityForce(FluidParticle currentParticle)
     {
         Vector3 viscosityForce = Vector3.Zero;
         Vector3 samplePoint = currentParticle.CurrentPosition;
+        var neighbors = GetNearbyNeighbors(samplePoint); //Now the particle looks at the neighbours based on the spatial hash
         
-        foreach (FluidParticle neighbor in particles)
+        foreach (FluidParticle neighbor in neighbors)
         {
             if (neighbor == currentParticle) continue; // Skip self
             float dst = (samplePoint - neighbor.CurrentPosition).Length;
