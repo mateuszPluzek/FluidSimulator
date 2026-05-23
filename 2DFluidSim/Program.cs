@@ -210,11 +210,11 @@ class Program
         // --- Delta time ---
         //calculating FPS and delta time for smooth simulation
         Stopwatch stopwatch = new Stopwatch();
+        Stopwatch frameTimer = new Stopwatch();
         stopwatch.Start();
         float lastTime = 0f;
         //FPS variable
-        float fpsTimer = 0f;
-        int frameCount = 0;
+        float titleUpdateTimer = 0f;
         // --- Main Loop ---
         while (true)
         {
@@ -226,16 +226,7 @@ class Program
             // Cap for safety
             if (dt > 0.1f) dt = 0.1f;
             //FPS calculation
-            fpsTimer += dt;
-            frameCount++;
-            if (fpsTimer >= 0.5f) // Update the console every 0.5 seconds
-            {
-                float fps = frameCount / fpsTimer;
-                Toolkit.Window.SetTitle(window,  $"2D Fluid Sim | FPS: {fps:F0}");
-                // Console.WriteLine($"FPS: {fps:F0}"); DEBUG MODE
-                fpsTimer = 0f;
-                frameCount = 0;
-            }
+            frameTimer.Restart();
             // --- Camera movement ---
             Vector3 moveDirection = Vector3.Zero;
             if (keysPressed[Scancode.W]) moveDirection += new Vector3(0f, 0f, 1f);
@@ -284,6 +275,19 @@ class Program
                 GL.UniformMatrix4f(modelUniformParticle, 1, true, ref model);
                 GL.DrawElements(PrimitiveType.Triangles, indices.Length, DrawElementsType.UnsignedInt, 0); //drawing
             }
+            //Time elapsed
+            frameTimer.Stop();
+            double frameTimeMs = frameTimer.Elapsed.TotalMilliseconds;
+            double instantFps = frameTimeMs > 0.0 ? 1000.0 / frameTimeMs : 99999.0;
+            //Print time
+            titleUpdateTimer += dt;
+            if (titleUpdateTimer >= 0.1f)
+            {
+                Toolkit.Window.SetTitle(window, $"Time: {frameTimeMs:F3} ms | Instant FPS: {instantFps:F0}");
+                Console.WriteLine($"Time: {frameTimeMs:F3} ms | Instant FPS: {instantFps:F0}");
+                titleUpdateTimer = 0f;
+            }
+            
             // --- Rendering Bounding box ---
             boundShader.Use(); //Shader for bounding box
             GL.BindVertexArray(boundVao); //using correct Vao
@@ -292,7 +296,6 @@ class Program
             GL.UniformMatrix4f(viewUniformBound, 1, true, camera.View);
             GL.UniformMatrix4f(modelUniformBound, 1, false, ref identity);
             GL.DrawArrays(PrimitiveType.LineStrip, 0, boxVertices.Length);
-            
             
             Toolkit.OpenGL.SwapBuffers(context); //swap back and front buffers
             //Event Handling

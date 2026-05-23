@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("2DFluidSim")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+1a1401f3f7a9d35b56127bc3d77636b2361c4c76")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+644a32eac39d172b3d2877a25a0206aa07641645")]
 [assembly: System.Reflection.AssemblyProductAttribute("2DFluidSim")]
 [assembly: System.Reflection.AssemblyTitleAttribute("2DFluidSim")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
