@@ -3,6 +3,7 @@ using OpenTK.Platform;
 using OpenTK.Graphics.OpenGL;
 using System.Diagnostics;
 using OpenTK.Windowing.Common;
+using System.Threading.Tasks;
 using MouseMoveEventArgs = OpenTK.Platform.MouseMoveEventArgs;
 
 namespace _2DFluidSim;
@@ -11,7 +12,7 @@ class Program
 {
     private static int screenHeight = 720;
     private static int screenWidth = 1280;
-    private static int particleAmount = 1000;
+    private static int particleAmount = 16000;
     
     private static float smoothingRadius = 0.5f;
     //variables based on smoothingRadius
@@ -20,10 +21,10 @@ class Program
     private static float viscosityKernelVolume;
     
     public static float targetDensity = 15.0f;
-    public static float pressureMultiplier = 0.9f;
+    public static float pressureMultiplier = 0.7f;
     public static float viscosityStrength = 0.045f;
     
-    // Spatial Hash Grid For Determining particles cell
+    // Spatial Hash Grid For Determining particles cell - READONLY when using parallel
     private static Dictionary<Vector3i, List<FluidParticle>> spatialGrid = new();
     // Static neighbour List
     private static List<FluidParticle> neighborCache = new List<FluidParticle>(500);
@@ -48,7 +49,7 @@ class Program
         //window options
         Toolkit.Window.SetMode(window, WindowMode.Normal); //Setting window mode to normal
         Toolkit.Window.SetSize(window, new Vector2i(screenWidth,screenHeight));
-        Toolkit.Window.SetTitle(window, "2D Fluid Sim");
+        Toolkit.Window.SetTitle(window, "3D Fluid Sim");
         GL.Viewport(0, 0, screenWidth,screenHeight); //important!!!
         // --- Camera Setup ---
         Toolkit.Window.GetClientSize(window, out Vector2i clientSize);
@@ -122,7 +123,7 @@ class Program
         
         // --- Objects ---
         //Bounding Box
-        BoundingBox3D box = new BoundingBox3D(-2.5f, 2.5f, -3.0f, 3.0f, -4.0f, 4.0f);
+        BoundingBox3D box = new BoundingBox3D(-3.5f, 3.5f, -3.0f, 3.0f, -4.0f, 4.0f);
         Vector3[] boxVertices = new Vector3[]
         {
             // Bottom 
@@ -244,36 +245,40 @@ class Program
             // --- Loop Code ---
             //GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit); //clearing buffer with color
             //Updating particles cell location
-            UpdateSpatialGrid(particles);
-            //calculating density for all particles
-            foreach (var particle in particles)
+            UpdateSpatialGrid(particles); //sequential preparing fo data
+            //calculating density for all particles PARALLEL
+            Parallel.ForEach(particles, particle =>
             {
                 particle.UpdateDensity(particles);
-            }
+            });
+            //calculating position and physics for particles PARALLEL
+            Parallel.ForEach(particles, particle =>
+            {
+                particle.UpdatePosition(box, particles, dt);
+            });/*
             // --- Rendering Particles ---
             particleShader.Use(); //Shader for particles
             GL.BindVertexArray(particleVao); //using correct Vao
             //Projection info
             GL.UniformMatrix4f(projectionUniformParticle, 1, true, camera.Projection);
             GL.UniformMatrix4f(viewUniformParticle, 1, true, camera.View);
-            //Draw every particle
-            foreach (var particle in particles) 
+            //Draw every particle 
+            foreach (var particle in particles)
             {
-                //calculating simulation
-                particle.UpdatePosition(box, particles, dt);/*
+                
                 //calculating speed for color
                 float speed = particle.Velocity.Length;
-                float maxExpectedSpeed = 3.0f; 
+                float maxExpectedSpeed = 3.0f;
                 float normalizedSpeed = speed / maxExpectedSpeed;
                 GL.Uniform1f(speedUniformParticle, normalizedSpeed);
-                
+
                 Matrix4 scale = Matrix4.CreateScale(particle.Radius);
                 Matrix4 translate = Matrix4.CreateTranslation(particle.CurrentPosition);
                 Matrix4 model = scale * translate;
-                
+
                 GL.UniformMatrix4f(modelUniformParticle, 1, true, ref model);
-                GL.DrawElements(PrimitiveType.Triangles, indices.Length, DrawElementsType.UnsignedInt, 0); //drawing*/
-            }
+                GL.DrawElements(PrimitiveType.Triangles, indices.Length, DrawElementsType.UnsignedInt, 0); //drawing
+            } //*/
             //Time elapsed
             frameTimer.Stop();
             double frameTimeMs = frameTimer.Elapsed.TotalMilliseconds;
@@ -401,9 +406,9 @@ class Program
         );
     }
     
-    public static List<FluidParticle> GetNearbyNeighbors(Vector3 position)
-    {
-        neighborCache.Clear(); //clearing current list
+    public static List<FluidParticle> GetNearbyNeighbors(Vector3 position) //Returns local allocation for the thread
+{
+        List<FluidParticle> neighbors = new List<FluidParticle>(64);
         Vector3i centerKey = GetCellKey(position);
 
         for (int x = -1; x <= 1; x++)
@@ -413,17 +418,16 @@ class Program
                 for (int z = -1; z <= 1; z++)
                 {
                     Vector3i targetKey = new Vector3i(centerKey.X + x, centerKey.Y + y, centerKey.Z + z);
+                    
+                    // Bezpieczne, ponieważ struktura słownika nie zmienia się w tym kroku
                     if (spatialGrid.TryGetValue(targetKey, out var cellParticles))
                     {
-                        for (int i = 0; i < cellParticles.Count; i++)
-                        {
-                            neighborCache.Add(cellParticles[i]);
-                        }
+                        neighbors.AddRange(cellParticles);
                     }
                 }
             }
         }
-        return neighborCache;
+        return neighbors;
     }
     // === density calcualtions ===
     public static float SmoothingKernel(float radius, float dst)
