@@ -11,7 +11,7 @@ class Program
 {
     private static int screenHeight = 720;
     private static int screenWidth = 1280;
-    private static int particleAmount = 700;
+    private static int particleAmount = 1000;
     
     private static float smoothingRadius = 0.5f;
     
@@ -210,11 +210,13 @@ class Program
         // --- Delta time ---
         //calculating FPS and delta time for smooth simulation
         Stopwatch stopwatch = new Stopwatch();
+        Stopwatch frameTimer = new Stopwatch();
         stopwatch.Start();
         float lastTime = 0f;
         //FPS variable
         float fpsTimer = 0f;
         int frameCount = 0;
+        float titleUpdateTimer = 0f;
         // --- Main Loop ---
         while (true)
         {
@@ -228,14 +230,6 @@ class Program
             //FPS calculation
             fpsTimer += dt;
             frameCount++;
-            if (fpsTimer >= 0.5f) // Update the console every 0.5 seconds
-            {
-                float fps = frameCount / fpsTimer;
-                Toolkit.Window.SetTitle(window,  $"2D Fluid Sim | FPS: {fps:F0}");
-                // Console.WriteLine($"FPS: {fps:F0}"); DEBUG MODE
-                fpsTimer = 0f;
-                frameCount = 0;
-            }
             // --- Camera movement ---
             Vector3 moveDirection = Vector3.Zero;
             if (keysPressed[Scancode.W]) moveDirection += new Vector3(0f, 0f, 1f);
@@ -252,8 +246,8 @@ class Program
             }
             
             // --- Loop Code ---
-            GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit); //clearing buffer with color
-            
+            //GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit); //clearing buffer with color
+            frameTimer.Restart();
             //calculating density for all particles
             foreach (var particle in particles)
             {
@@ -269,7 +263,7 @@ class Program
             foreach (var particle in particles) 
             {
                 //calculating simulation
-                particle.UpdatePosition(box, particles, dt);
+                particle.UpdatePosition(box, particles, dt);/*
                 
                 //calculating speed for color
                 float speed = particle.Velocity.Length;
@@ -282,8 +276,20 @@ class Program
                 Matrix4 model = scale * translate;
                 
                 GL.UniformMatrix4f(modelUniformParticle, 1, true, ref model);
-                GL.DrawElements(PrimitiveType.Triangles, indices.Length, DrawElementsType.UnsignedInt, 0); //drawing
+                GL.DrawElements(PrimitiveType.Triangles, indices.Length, DrawElementsType.UnsignedInt, 0); //drawing*/
             }
+            //Time elapsed
+            frameTimer.Stop();
+            double frameTimeMs = frameTimer.Elapsed.TotalMilliseconds;
+            double instantFps = frameTimeMs > 0.0 ? 1000.0 / frameTimeMs : 99999.0;
+            //--- Print FPS ---
+            titleUpdateTimer += dt;
+            if (titleUpdateTimer >= 0.1f)
+            {
+                Toolkit.Window.SetTitle(window, $"Time: {frameTimeMs:F3} ms | Instant FPS: {instantFps:F0}");
+                Console.WriteLine($"Time: {frameTimeMs:F3} ms | Instant FPS: {instantFps:F0}");
+                titleUpdateTimer = 0f;
+            }/*
             // --- Rendering Bounding box ---
             boundShader.Use(); //Shader for bounding box
             GL.BindVertexArray(boundVao); //using correct Vao
@@ -291,7 +297,7 @@ class Program
             GL.UniformMatrix4f(projectionUniformBound, 1, true, camera.Projection);
             GL.UniformMatrix4f(viewUniformBound, 1, true, camera.View);
             GL.UniformMatrix4f(modelUniformBound, 1, false, ref identity);
-            GL.DrawArrays(PrimitiveType.LineStrip, 0, boxVertices.Length);
+            GL.DrawArrays(PrimitiveType.LineStrip, 0, boxVertices.Length);// */
             
             
             Toolkit.OpenGL.SwapBuffers(context); //swap back and front buffers
