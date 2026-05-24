@@ -11,11 +11,11 @@ class Program
 {
     private static int screenHeight = 720;
     private static int screenWidth = 1280;
-    private static int particleAmount = 4000;
+    private static int particleAmount = 1000;
     
     private static float smoothingRadius = 0.5f;
     
-    public static float targetDensity = 25.0f;
+    public static float targetDensity = 15.0f;
     public static float pressureMultiplier = 0.9f;
     public static float viscosityStrength = 0.045f;
     
