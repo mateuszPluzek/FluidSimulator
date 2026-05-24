@@ -14,6 +14,10 @@ class Program
     private static int particleAmount = 1000;
     
     private static float smoothingRadius = 0.5f;
+    //variables based on smoothingRadius
+    private static float densityKernelVolumeScale;
+    private static float pressureKernelScale;
+    private static float viscosityKernelVolume;
     
     public static float targetDensity = 15.0f;
     public static float pressureMultiplier = 0.9f;
@@ -21,8 +25,15 @@ class Program
     
     // Spatial Hash Grid For Determining particles cell
     private static Dictionary<Vector3i, List<FluidParticle>> spatialGrid = new();
+    // Static neighbour List
+    private static List<FluidParticle> neighborCache = new List<FluidParticle>(500);
     static void Main()
     {
+        //Calculating Pow of Radius
+        float r = smoothingRadius;
+        densityKernelVolumeScale = 10f / (Single.Pi * float.Pow(r, 5));
+        pressureKernelScale = 30f / (float.Pow(r, 5) * Single.Pi);
+        viscosityKernelVolume = (2f * Single.Pi * float.Pow(r, 5)) / 15f;
         // --- OpenGL Setup ---
         //Toolkit setup
         ToolkitOptions tkOptions = new ToolkitOptions();
@@ -362,13 +373,19 @@ class Program
     // === Spatial Grid Code ===
     private static void UpdateSpatialGrid(List<FluidParticle> particles)
     {
-        spatialGrid.Clear();
+        //clearing list inside the dictionary
+        foreach (var cellList in spatialGrid.Values)
+        {
+            cellList.Clear();
+        }
+
         foreach (var particle in particles)
         {
             Vector3i cellKey = GetCellKey(particle.CurrentPosition);
             if (!spatialGrid.TryGetValue(cellKey, out var cellList))
             {
-                cellList = new List<FluidParticle>();
+                // new list are only created when cell first appears in the simulation
+                cellList = new List<FluidParticle>(32);
                 spatialGrid[cellKey] = cellList;
             }
             cellList.Add(particle);
@@ -386,10 +403,9 @@ class Program
     
     public static List<FluidParticle> GetNearbyNeighbors(Vector3 position)
     {
-        List<FluidParticle> neighbors = new List<FluidParticle>();
+        neighborCache.Clear(); //clearing current list
         Vector3i centerKey = GetCellKey(position);
 
-        // Check 3x3x3 space around home cell
         for (int x = -1; x <= 1; x++)
         {
             for (int y = -1; y <= 1; y++)
@@ -399,28 +415,29 @@ class Program
                     Vector3i targetKey = new Vector3i(centerKey.X + x, centerKey.Y + y, centerKey.Z + z);
                     if (spatialGrid.TryGetValue(targetKey, out var cellParticles))
                     {
-                        neighbors.AddRange(cellParticles);
+                        for (int i = 0; i < cellParticles.Count; i++)
+                        {
+                            neighborCache.Add(cellParticles[i]);
+                        }
                     }
                 }
             }
         }
-        return neighbors;
+        return neighborCache;
     }
     // === density calcualtions ===
     public static float SmoothingKernel(float radius, float dst)
     {
         if (dst >= radius) return 0;
-        
-        float volume = (Single.Pi * float.Pow(radius, 5)) / 10f;
-        return (radius - dst) * (radius - dst) * (radius - dst) / volume;
+        float diff = radius - dst;
+        return (diff * diff * diff) * densityKernelVolumeScale;
     }
     //derivative of smoothing kernel used for getting the slope
     public static float SmoothingKernelDerivative(float radius, float dst)
     {
         if (dst >= radius) return 0;
-        
-        float scale = 30f / (float.Pow(radius, 5) * Single.Pi);
-        return -((radius - dst) * (radius - dst)) * scale;
+        float diff = radius - dst;
+        return -(diff * diff) * pressureKernelScale;
     }
 
     public static float CalculateDensity(Vector3 samplePoint)
@@ -478,8 +495,7 @@ class Program
     {
         if (dst >= radius) return 0;
 
-        float volume = (2f * Single.Pi * float.Pow(radius, 5)) / 15f;
-        return (radius - dst) / volume;
+        return (radius - dst) / viscosityKernelVolume;
     }
     public static Vector3 CalculateViscosityForce(FluidParticle currentParticle)
     {
