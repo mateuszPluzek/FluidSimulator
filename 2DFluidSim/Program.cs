@@ -11,13 +11,13 @@ class Program
 {
     private static int screenHeight = 720;
     private static int screenWidth = 1280;
-    private static int particleAmount = 400;
+    private static int particleAmount = 700;
     
-    private static float smoothingRadius = 0.4f;
+    private static float smoothingRadius = 0.45f;
     
-    public static float targetDensity = 100.0f;
-    public static float pressureMultiplier = 0.8f;
-    public static float viscosityStrength = 0.015f;
+    public static float targetDensity = 150.0f;
+    public static float pressureMultiplier = 0.9f;
+    public static float viscosityStrength = 0.04f;
     static void Main()
     {
         // --- OpenGL Setup ---
@@ -60,7 +60,7 @@ class Program
         // Width: 0.3, centered at X=0
         // Bottom gap: 0.1 above box.MinY
         // Doesn't go to top: ends halfway at Y=0.5f (adjust as needed)
-        BoundingBox pillar = new BoundingBox(-0.15f, 0.15f, box.MinY + 0.2f, 0.5f);
+        BoundingBox pillar = new BoundingBox(-0.15f, 0.15f, box.MinY + 0.3f, 0.5f);
         Vector3[] pillarVertices = new Vector3[]
         {
             new Vector3(pillar.MinX, pillar.MinY, 0),
