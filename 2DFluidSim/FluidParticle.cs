@@ -3,9 +3,9 @@ using OpenTK.Mathematics;
 using OpenTK.Platform;
 
 namespace _2DFluidSim;
-
 public class FluidParticle
 {
+    /*
     // Values for rendering and collision
     public Vector3 StartPosition { get; set; }
     public Vector3 CurrentPosition { get; set; }
@@ -108,5 +108,5 @@ public class FluidParticle
         this.Velocity = resolvedVelocity;
         this.CurrentPosition = resolvedPosition;
     }
-
+*/
 }

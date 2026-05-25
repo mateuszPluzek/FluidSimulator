@@ -46,6 +46,10 @@
         "net9.0": {
           "targetAlias": "net9.0",
           "dependencies": {
+            "ILGPU": {
+              "target": "Package",
+              "version": "[1.5.3, )"
+            },
             "OpenTK": {
               "target": "Package",
               "version": "[5.0.0-pre.15, )"

@@ -9,6 +9,7 @@
     </PropertyGroup>
 
     <ItemGroup>
+      <PackageReference Include="ILGPU" Version="1.5.3" />
       <PackageReference Include="OpenTK" Version="5.0.0-pre.15" />
     </ItemGroup>
 

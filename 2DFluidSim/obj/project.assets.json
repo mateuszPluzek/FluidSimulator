@@ -2,6 +2,19 @@
   "version": 3,
   "targets": {
     "net9.0": {
+      "ILGPU/1.5.3": {
+        "type": "package",
+        "compile": {
+          "lib/net7.0/ILGPU.dll": {
+            "related": ".xml"
+          }
+        },
+        "runtime": {
+          "lib/net7.0/ILGPU.dll": {
+            "related": ".xml"
+          }
+        }
+      },
       "OpenTK/5.0.0-pre.15": {
         "type": "package",
         "dependencies": {
@@ -222,6 +235,30 @@
     }
   },
   "libraries": {
+    "ILGPU/1.5.3": {
+      "sha512": "VhAfQqnp/qTcQla5zcBPQIoUJox8T1EuZLuKrynFFE1BQvOOUCksiCb9IQAJa2MSJf6QDi5YIoG45K0I+GWcgg==",
+      "type": "package",
+      "path": "ilgpu/1.5.3",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "LICENSE-3RD-PARTY.txt",
+        "LICENSE.txt",
+        "ilgpu.1.5.3.nupkg.sha512",
+        "ilgpu.nuspec",
+        "lib/net471/ILGPU.dll",
+        "lib/net471/ILGPU.pdb",
+        "lib/net471/ILGPU.xml",
+        "lib/net5.0/ILGPU.dll",
+        "lib/net5.0/ILGPU.xml",
+        "lib/net6.0/ILGPU.dll",
+        "lib/net6.0/ILGPU.xml",
+        "lib/net7.0/ILGPU.dll",
+        "lib/net7.0/ILGPU.xml",
+        "lib/netstandard2.1/ILGPU.dll",
+        "lib/netstandard2.1/ILGPU.xml"
+      ]
+    },
     "OpenTK/5.0.0-pre.15": {
       "sha512": "CDGbelIIaGCBNPekNqh/zQsy63q+PTrVOWWWi7A3d/QrHVd0T5nDhSqqJpD77Xs/qHFRDhL1C3+Qh5CDYJyzig==",
       "type": "package",
@@ -438,6 +475,7 @@
   },
   "projectFileDependencyGroups": {
     "net9.0": [
+      "ILGPU >= 1.5.3",
       "OpenTK >= 5.0.0-pre.15"
     ]
   },
@@ -486,6 +524,10 @@
       "net9.0": {
         "targetAlias": "net9.0",
         "dependencies": {
+          "ILGPU": {
+            "target": "Package",
+            "version": "[1.5.3, )"
+          },
           "OpenTK": {
             "target": "Package",
             "version": "[5.0.0-pre.15, )"

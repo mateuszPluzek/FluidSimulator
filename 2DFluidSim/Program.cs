@@ -4,6 +4,9 @@ using OpenTK.Graphics.OpenGL;
 using System.Diagnostics;
 using OpenTK.Windowing.Common;
 using System.Threading.Tasks;
+using ILGPU;
+using ILGPU.Runtime;
+using ILGPU.Runtime.Cuda;
 using MouseMoveEventArgs = OpenTK.Platform.MouseMoveEventArgs;
 
 namespace _2DFluidSim;
@@ -12,7 +15,7 @@ class Program
 {
     private static int screenHeight = 720;
     private static int screenWidth = 1280;
-    private static int particleAmount = 500;
+    private static int particleAmount = 25000;
     
     private static float smoothingRadius = 0.5f;
     //variables based on smoothingRadius
@@ -30,6 +33,19 @@ class Program
     private static List<FluidParticle> neighborCache = new List<FluidParticle>(500);
     static void Main()
     {
+        // --- Cuda Setup ---
+        //ILGPU initialization and CUDA drivers
+        using var cudaContext = Context.Create(builder => builder.Cuda());
+        var device = cudaContext.GetCudaDevice(0); //Getting GPU
+        using var accelerator = device.CreateAccelerator(cudaContext);
+        //Compilation JIT of C# kernel for GPU code (compiling kernels)
+        var densityKernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<GpuParticle>, float, float
+        >(FluidKernels.ComputeDensityKernel);
+        
+        var positionKernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<GpuParticle>, float, float, float, float, float, float, float, float, float, float, float, float, float
+        >(FluidKernels.UpdatePositionsKernel);
         //Calculating Pow of Radius
         float r = smoothingRadius;
         densityKernelVolumeScale = 10f / (Single.Pi * float.Pow(r, 5));
@@ -49,7 +65,7 @@ class Program
         //window options
         Toolkit.Window.SetMode(window, WindowMode.Normal); //Setting window mode to normal
         Toolkit.Window.SetSize(window, new Vector2i(screenWidth,screenHeight));
-        Toolkit.Window.SetTitle(window, "3D Fluid Sim");
+        Toolkit.Window.SetTitle(window, "3D Fluid Sim CUDA");
         GL.Viewport(0, 0, screenWidth,screenHeight); //important!!!
         // --- Camera Setup ---
         Toolkit.Window.GetClientSize(window, out Vector2i clientSize);
@@ -147,26 +163,25 @@ class Program
             new Vector3(box.MinX, box.MaxY, box.MaxZ),
             new Vector3(box.MinX, box.MinY, box.MaxZ)
         };
-        //Fluid particles
-        List<FluidParticle> particles = new List<FluidParticle>();
+        //Fluid particles (static array for CPU memory)
+        GpuParticle[] hostParticles = new GpuParticle[particleAmount];
         Random random = new Random();
-        // Spawning volume
-        float spawnMinX = box.MinX + 0.2f; 
-        float spawnMaxX = box.MinX + 1.2f; 
-        float spawnMinY = box.MaxY - 1.0f;
-        float spawnMaxY = box.MaxY - 0.1f;
-        float spawnMinZ = box.MinZ + 0.3f; 
-        float spawnMaxZ = box.MaxZ - 0.3f; 
+        float spawnMinX = box.MinX + 0.2f; float spawnMaxX = box.MinX + 1.2f; 
+        float spawnMinY = box.MaxY - 1.0f; float spawnMaxY = box.MaxY - 0.1f;
+        float spawnMinZ = box.MinZ + 0.3f; float spawnMaxZ = box.MaxZ - 0.3f; 
+
         for (int i = 0; i < particleAmount; i++)
         {
-            // Generate a random position constrained entirely within the upper-left sub-box
-            float randomX = spawnMinX + (float)random.NextDouble() * (spawnMaxX - spawnMinX);
-            float randomY = spawnMinY + (float)random.NextDouble() * (spawnMaxY - spawnMinY);
-            float randomZ = spawnMinZ + (float)random.NextDouble() * (spawnMaxZ - spawnMinZ); 
-
-            FluidParticle particle = new FluidParticle(new Vector3(randomX, randomY, randomZ), 0.05f);
-            particles.Add(particle);
+            hostParticles[i].Position.X = spawnMinX + (float)random.NextDouble() * (spawnMaxX - spawnMinX);
+            hostParticles[i].Position.Y = spawnMinY + (float)random.NextDouble() * (spawnMaxY - spawnMinY);
+            hostParticles[i].Position.Z = spawnMinZ + (float)random.NextDouble() * (spawnMaxZ - spawnMinZ); 
+            hostParticles[i].Velocity = Vector3.Zero;
+            hostParticles[i].Mass = 1.0f;
+            hostParticles[i].Density = 0.0f;
         }
+        // Allocation of memory buffer in VRAM
+        using MemoryBuffer1D<GpuParticle, Stride1D.Dense> gpuParticlesBuffer = accelerator.Allocate1D(hostParticles); 
+        
         //Single particle sphere
         var sphereData = GenerateSphere(1.0f, 16, 16);
         Vector3[] vertices = sphereData.Vertices;
@@ -242,47 +257,25 @@ class Program
             if (dt > 0.1f) dt = 0.1f;
             //FPS calculation
             frameTimer.Restart();
-            // --- Loop Code ---
-            //GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit); //clearing buffer with color
+            // --- Starting the CUDA kernels ---
+            //Calculating the density for all the particles
+            densityKernel((int)gpuParticlesBuffer.Length, gpuParticlesBuffer.View, smoothingRadius, densityKernelVolumeScale);
+            // Calculating forces and updating the positions
+            positionKernel(
+                (int)gpuParticlesBuffer.Length, 
+                gpuParticlesBuffer.View, 
+                box.MinX, box.MaxX, box.MinY, box.MaxY, box.MinZ, box.MaxZ,
+                smoothingRadius, pressureKernelScale, viscosityKernelVolume,
+                targetDensity, pressureMultiplier, viscosityStrength, dt
+            );
+            //Waiting for the frame calculations (synchronization of the GPU accelerator)
+            accelerator.Synchronize();
+            //Copy data from device to the CPU for rendering needs
+            gpuParticlesBuffer.CopyToCPU(hostParticles);
+            // --- Render loop code ---
+            
+            GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit); //clearing buffer with color
             //Updating particles cell location
-            UpdateSpatialGrid(particles); //sequential preparing fo data
-            int threadsCount = Environment.ProcessorCount;
-            int chunkSize = particleAmount / threadsCount;
-            //calculating density for all particles PARALLEL
-            Task[] densityTasks = new Task[threadsCount];
-            for (int i = 0; i < threadsCount; i++)
-            {
-                int threadId = i;
-                densityTasks[i] = Task.Run(() =>
-                {
-                    int start = threadId * chunkSize;
-                    int end = (threadId == threadsCount - 1) ? particleAmount : start + chunkSize;
-
-                    for (int j = start; j < end; j++)
-                    {
-                        particles[j].UpdateDensity(particles);
-                    }
-                });
-            }
-            Task.WaitAll(densityTasks); //wait for all cores to finish
-            //calculating position and physics for particles PARALLEL
-            Task[] positionTasks = new Task[threadsCount];
-            for (int i = 0; i < threadsCount; i++)
-            {
-                int threadId = i;
-                positionTasks[i] = Task.Run(() =>
-                {
-                    int start = threadId * chunkSize;
-                    int end = (threadId == threadsCount - 1) ? particleAmount : start + chunkSize;
-
-                    for (int j = start; j < end; j++)
-                    {
-                        particles[j].UpdatePosition(box, particles, dt);
-                    }
-                });
-            }
-            Task.WaitAll(densityTasks); //wait for all cores to finish
-            /*
             // --- Rendering Particles ---
             particleShader.Use(); //Shader for particles
             GL.BindVertexArray(particleVao); //using correct Vao
@@ -290,21 +283,19 @@ class Program
             GL.UniformMatrix4f(projectionUniformParticle, 1, true, camera.Projection);
             GL.UniformMatrix4f(viewUniformParticle, 1, true, camera.View);
             //Draw every particle 
-            foreach (var particle in particles)
+            for (int i = 0; i < particleAmount; i++)
             {
-                
-                //calculating speed for color
-                float speed = particle.Velocity.Length;
+                float speed = hostParticles[i].Velocity.Length;
                 float maxExpectedSpeed = 3.0f;
                 float normalizedSpeed = speed / maxExpectedSpeed;
                 GL.Uniform1f(speedUniformParticle, normalizedSpeed);
 
-                Matrix4 scale = Matrix4.CreateScale(particle.Radius);
-                Matrix4 translate = Matrix4.CreateTranslation(particle.CurrentPosition);
+                Matrix4 scale = Matrix4.CreateScale(0.05f); // TODO make particle radius a variable
+                Matrix4 translate = Matrix4.CreateTranslation(hostParticles[i].Position);
                 Matrix4 model = scale * translate;
 
                 GL.UniformMatrix4f(modelUniformParticle, 1, true, ref model);
-                GL.DrawElements(PrimitiveType.Triangles, indices.Length, DrawElementsType.UnsignedInt, 0); //drawing
+                GL.DrawElements(PrimitiveType.Triangles, indices.Length, DrawElementsType.UnsignedInt, 0);
             } //*/
             //Time elapsed
             frameTimer.Stop();
@@ -317,7 +308,7 @@ class Program
                 Toolkit.Window.SetTitle(window, $"Time: {frameTimeMs:F3} ms | Instant FPS: {instantFps:F0}");
                 Console.WriteLine($"Time: {frameTimeMs:F3} ms | Instant FPS: {instantFps:F0}");
                 titleUpdateTimer = 0f;
-            }/*
+            }
             // --- Rendering Bounding box ---
             boundShader.Use(); //Shader for bounding box
             GL.BindVertexArray(boundVao); //using correct Vao
@@ -402,6 +393,7 @@ class Program
 
         return (vertices.ToArray(), indices.ToArray());
     }
+    /*
     // === Spatial Grid Code ===
     private static void UpdateSpatialGrid(List<FluidParticle> particles)
     {
@@ -544,6 +536,7 @@ class Program
         }
         return viscosityForce * viscosityStrength;
     }
-
+    
+    */
 }
 
