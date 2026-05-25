@@ -12,7 +12,7 @@ class Program
 {
     private static int screenHeight = 720;
     private static int screenWidth = 1280;
-    private static int particleAmount = 000;
+    private static int particleAmount = 500;
     
     private static float smoothingRadius = 0.5f;
     //variables based on smoothingRadius
