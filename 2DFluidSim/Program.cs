@@ -12,7 +12,7 @@ class Program
 {
     private static int screenHeight = 720;
     private static int screenWidth = 1280;
-    private static int particleAmount = 500;
+    private static int particleAmount = 1000;
     
     private static float smoothingRadius = 0.5f;
     //variables based on smoothingRadius
@@ -222,67 +222,63 @@ class Program
         int projectionUniformBound = GL.GetUniformLocation(boundShader.Id, "projection");
         int modelUniformBound = GL.GetUniformLocation(boundShader.Id, "model");
         
-        // --- Delta time ---
-        //calculating FPS and delta time for smooth simulation
-        Stopwatch stopwatch = new Stopwatch();
-        Stopwatch frameTimer = new Stopwatch();
-        stopwatch.Start();
-        float lastTime = 0f;
-        //FPS variable
+        //buffers for particle data exchange
+        SimulationBuffers simBuffers = new SimulationBuffers(particleAmount);
+        //concurrent openGL and simulation
+        Vector3[] drawPositions = new Vector3[particleAmount];
+        float[] drawSpeeds = new float[particleAmount];
+        
+        
+        // --- physic thread ---
+        Stopwatch physicsStopwatch = new Stopwatch();
+        physicsStopwatch.Start();
+        float lastPhysicsTime = 0f;
+        bool isRunning = true;
+        Task.Run(() =>
+        {
+            while (isRunning)
+            {
+                float currentPhysicsTime = (float)physicsStopwatch.Elapsed.TotalSeconds;
+                float pDt = currentPhysicsTime - lastPhysicsTime;
+                lastPhysicsTime = currentPhysicsTime;
+                if (pDt > 0.1f) pDt = 0.1f;
+
+                
+                UpdateSpatialGrid(particles);
+
+                Parallel.ForEach(particles, particle => { particle.UpdateDensity(particles); });
+                Parallel.ForEach(particles, particle => { particle.UpdatePosition(box,particles, pDt); });
+
+                // Przepisujemy wyniki do bufora fizycznego
+                for (int i = 0; i < particleAmount; i++)
+                {
+                    simBuffers.PhysicsPositions[i] = particles[i].CurrentPosition;
+                    simBuffers.PhysicsSpeeds[i] = particles[i].Velocity.Length;
+                }
+
+                // Zamieniamy bufory, udostępniając dane wątkowi graficznemu
+                simBuffers.SwapBuffers();
+
+                // Opcjonalnie: mały odpoczynek dla procesora (np. max 120 aktualizacji fizyki na sekundę)
+                Thread.Sleep(8); 
+            }
+        });
+        // --- Render Thread ---
+        Stopwatch renderStopwatch = new Stopwatch();
+        renderStopwatch.Start();
+        float lastRenderTime = 0f;
         float titleUpdateTimer = 0f;
-        // --- Main Loop ---
         while (true)
         {
             // --- DELTA TIME ---
             // Calculating Delta Time
-            float currentTime = (float)stopwatch.Elapsed.TotalSeconds;
-            float dt = currentTime - lastTime;
-            lastTime = currentTime;
-            // Cap for safety
-            if (dt > 0.1f) dt = 0.1f;
-            //FPS calculation
-            frameTimer.Restart();
+            float currentRenderTime = (float)renderStopwatch.Elapsed.TotalSeconds;
+            float rDt = currentRenderTime - lastRenderTime;
+            lastRenderTime = currentRenderTime;
+
+            simBuffers.GetRenderData(drawPositions, drawSpeeds);
             // --- Loop Code ---
-            //GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit); //clearing buffer with color
-            //Updating particles cell location
-            UpdateSpatialGrid(particles); //sequential preparing fo data
-            int threadsCount = Environment.ProcessorCount;
-            int chunkSize = particleAmount / threadsCount;
-            //calculating density for all particles PARALLEL
-            Task[] densityTasks = new Task[threadsCount];
-            for (int i = 0; i < threadsCount; i++)
-            {
-                int threadId = i;
-                densityTasks[i] = Task.Run(() =>
-                {
-                    int start = threadId * chunkSize;
-                    int end = (threadId == threadsCount - 1) ? particleAmount : start + chunkSize;
-
-                    for (int j = start; j < end; j++)
-                    {
-                        particles[j].UpdateDensity(particles);
-                    }
-                });
-            }
-            Task.WaitAll(densityTasks); //wait for all cores to finish
-            //calculating position and physics for particles PARALLEL
-            Task[] positionTasks = new Task[threadsCount];
-            for (int i = 0; i < threadsCount; i++)
-            {
-                int threadId = i;
-                positionTasks[i] = Task.Run(() =>
-                {
-                    int start = threadId * chunkSize;
-                    int end = (threadId == threadsCount - 1) ? particleAmount : start + chunkSize;
-
-                    for (int j = start; j < end; j++)
-                    {
-                        particles[j].UpdatePosition(box, particles, dt);
-                    }
-                });
-            }
-            Task.WaitAll(densityTasks); //wait for all cores to finish
-            /*
+            GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit); //clearing buffer with color
             // --- Rendering Particles ---
             particleShader.Use(); //Shader for particles
             GL.BindVertexArray(particleVao); //using correct Vao
@@ -305,19 +301,7 @@ class Program
 
                 GL.UniformMatrix4f(modelUniformParticle, 1, true, ref model);
                 GL.DrawElements(PrimitiveType.Triangles, indices.Length, DrawElementsType.UnsignedInt, 0); //drawing
-            } //*/
-            //Time elapsed
-            frameTimer.Stop();
-            double frameTimeMs = frameTimer.Elapsed.TotalMilliseconds;
-            double instantFps = frameTimeMs > 0.0 ? 1000.0 / frameTimeMs : 99999.0;
-            //--- Print FPS ---
-            titleUpdateTimer += dt;
-            if (titleUpdateTimer >= 0.1f)
-            {
-                Toolkit.Window.SetTitle(window, $"Time: {frameTimeMs:F3} ms | Instant FPS: {instantFps:F0}");
-                Console.WriteLine($"Time: {frameTimeMs:F3} ms | Instant FPS: {instantFps:F0}");
-                titleUpdateTimer = 0f;
-            }/*
+            } 
             // --- Rendering Bounding box ---
             boundShader.Use(); //Shader for bounding box
             GL.BindVertexArray(boundVao); //using correct Vao
@@ -327,7 +311,16 @@ class Program
             GL.UniformMatrix4f(modelUniformBound, 1, false, ref identity);
             GL.DrawArrays(PrimitiveType.LineStrip, 0, boxVertices.Length);
             
-            Toolkit.OpenGL.SwapBuffers(context); //swap back and front buffers*/
+            Toolkit.OpenGL.SwapBuffers(context); //swap back and front buffers
+            //Time elapsed
+            titleUpdateTimer += rDt;
+            if (titleUpdateTimer >= 0.1f)
+            {
+                double instantFps = rDt > 0.0 ? 1.0 / rDt : 999.0;
+                Toolkit.Window.SetTitle(window, $"Render FPS: {instantFps:F0} (Współbieżność aktywne)");
+                titleUpdateTimer = 0f;
+            }
+            
             // --- Camera movement ---
             Vector3 moveDirection = Vector3.Zero;
             if (keysPressed[Scancode.W]) moveDirection += new Vector3(0f, 0f, 1f);
@@ -340,7 +333,7 @@ class Program
             if (moveDirection != Vector3.Zero)
             {
                 // Adjust the multiplier value (e.g., 4.0f) to make the fly speed faster or slower
-                camera.Move(moveDirection * (4.0f * dt)); 
+                camera.Move(moveDirection * (4.0f * rDt)); 
             }
             //Event Handling
             Toolkit.Window.ProcessEvents(false);
