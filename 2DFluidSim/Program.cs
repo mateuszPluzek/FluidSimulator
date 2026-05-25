@@ -15,7 +15,7 @@ class Program
 {
     private static int screenHeight = 720;
     private static int screenWidth = 1280;
-    private static int particleAmount = 25000;
+    private static int particleAmount = 75000;
     
     private static float smoothingRadius = 0.5f;
     //variables based on smoothingRadius
@@ -26,6 +26,8 @@ class Program
     public static float targetDensity = 15.0f;
     public static float pressureMultiplier = 0.7f;
     public static float viscosityStrength = 0.045f;
+
+    private const int CELL_MAX_CAPACITY = 64;
     
     // Spatial Hash Grid For Determining particles cell - READONLY when using parallel
     private static Dictionary<Vector3i, List<FluidParticle>> spatialGrid = new();
@@ -39,13 +41,13 @@ class Program
         var device = cudaContext.GetCudaDevice(0); //Getting GPU
         using var accelerator = device.CreateAccelerator(cudaContext);
         //Compilation JIT of C# kernel for GPU code (compiling kernels)
-        var densityKernel = accelerator.LoadAutoGroupedStreamKernel<
-            Index1D, ArrayView<GpuParticle>, float, float
-        >(FluidKernels.ComputeDensityKernel);
+        var densityKernel = accelerator.LoadAutoGroupedStreamKernel(
+            (Action<Index1D, ArrayView<GpuParticle>, ArrayView3D<int, Stride3D.DenseXY>, ArrayView3D<int, Stride3D.DenseXY>, int, FluidConfig>)
+            FluidKernels.ComputeDensityKernel);
         
-        var positionKernel = accelerator.LoadAutoGroupedStreamKernel<
-            Index1D, ArrayView<GpuParticle>, float, float, float, float, float, float, float, float, float, float, float, float, float
-        >(FluidKernels.UpdatePositionsKernel);
+        var positionKernel = accelerator.LoadAutoGroupedStreamKernel(
+            (Action<Index1D, ArrayView<GpuParticle>, ArrayView3D<int, Stride3D.DenseXY>, ArrayView3D<int, Stride3D.DenseXY>, int, FluidConfig, float>)
+            FluidKernels.UpdatePositionsKernel);
         //Calculating Pow of Radius
         float r = smoothingRadius;
         densityKernelVolumeScale = 10f / (Single.Pi * float.Pow(r, 5));
@@ -163,24 +165,34 @@ class Program
             new Vector3(box.MinX, box.MaxY, box.MaxZ),
             new Vector3(box.MinX, box.MinY, box.MaxZ)
         };
+        // Static dimensions of spatial grid cells based on the bounding box
+        Vector3 gridMin = new Vector3(box.MinX - 0.5f, box.MinY - 0.5f, box.MinZ - 0.5f);
+        Vector3 gridMax = new Vector3(box.MaxX + 0.5f, box.MaxY + 0.5f, box.MaxZ + 0.5f);
+        Vector3i gridDimensions = new Vector3i(
+            (int)MathF.Ceiling((gridMax.X - gridMin.X) / smoothingRadius),
+            (int)MathF.Ceiling((gridMax.Y - gridMin.Y) / smoothingRadius),
+            (int)MathF.Ceiling((gridMax.Z - gridMin.Z) / smoothingRadius)
+        );
+        // arrays for the spatial grid
+        int[,,] hostGridParticles = new int[gridDimensions.X, gridDimensions.Y, gridDimensions.Z * CELL_MAX_CAPACITY];
+        int[,,] hostCellCounts = new int[gridDimensions.X, gridDimensions.Y, gridDimensions.Z];
         //Fluid particles (static array for CPU memory)
         GpuParticle[] hostParticles = new GpuParticle[particleAmount];
         Random random = new Random();
-        float spawnMinX = box.MinX + 0.2f; float spawnMaxX = box.MinX + 1.2f; 
-        float spawnMinY = box.MaxY - 1.0f; float spawnMaxY = box.MaxY - 0.1f;
-        float spawnMinZ = box.MinZ + 0.3f; float spawnMaxZ = box.MaxZ - 0.3f; 
-
         for (int i = 0; i < particleAmount; i++)
         {
-            hostParticles[i].Position.X = spawnMinX + (float)random.NextDouble() * (spawnMaxX - spawnMinX);
-            hostParticles[i].Position.Y = spawnMinY + (float)random.NextDouble() * (spawnMaxY - spawnMinY);
-            hostParticles[i].Position.Z = spawnMinZ + (float)random.NextDouble() * (spawnMaxZ - spawnMinZ); 
+            hostParticles[i].Position = new Vector3(
+                box.MinX + 0.5f + (float)random.NextDouble() * 1.5f,
+                box.MaxY - 1.5f + (float)random.NextDouble() * 1.0f,
+                box.MinZ + 0.5f + (float)random.NextDouble() * 2.0f
+            );
             hostParticles[i].Velocity = Vector3.Zero;
             hostParticles[i].Mass = 1.0f;
-            hostParticles[i].Density = 0.0f;
         }
         // Allocation of memory buffer in VRAM
-        using MemoryBuffer1D<GpuParticle, Stride1D.Dense> gpuParticlesBuffer = accelerator.Allocate1D(hostParticles); 
+        using MemoryBuffer1D<GpuParticle, Stride1D.Dense> gpuParticlesBuffer = accelerator.Allocate1D(hostParticles);
+        using MemoryBuffer3D<int, Stride3D.DenseXY> gpuGridParticles = accelerator.Allocate3DDenseXY<int>(new LongIndex3D(gridDimensions.X, gridDimensions.Y, gridDimensions.Z * CELL_MAX_CAPACITY));
+        using MemoryBuffer3D<int, Stride3D.DenseXY> gpuCellCounts = accelerator.Allocate3DDenseXY<int>(new LongIndex3D(gridDimensions.X, gridDimensions.Y, gridDimensions.Z)); 
         
         //Single particle sphere
         var sphereData = GenerateSphere(1.0f, 16, 16);
@@ -246,6 +258,7 @@ class Program
         //FPS variable
         float titleUpdateTimer = 0f;
         // --- Main Loop ---
+        Index1D gridExtent = new Index1D(particleAmount); //the amount of threads needed for the spatial grid
         while (true)
         {
             // --- DELTA TIME ---
@@ -257,23 +270,55 @@ class Program
             if (dt > 0.1f) dt = 0.1f;
             //FPS calculation
             frameTimer.Restart();
+            //-- Spatial Grid calculations on the CPU ---
+            Array.Clear(hostCellCounts, 0, hostCellCounts.Length);
+            for (int i = 0; i < particleAmount; i++)
+            {
+                int cellX = (int)MathF.Floor((hostParticles[i].Position.X - gridMin.X) / smoothingRadius);
+                int cellY = (int)MathF.Floor((hostParticles[i].Position.Y - gridMin.Y) / smoothingRadius);
+                int cellZ = (int)MathF.Floor((hostParticles[i].Position.Z - gridMin.Z) / smoothingRadius);
+
+                // validation of spatial grid indexes
+                if (cellX >= 0 && cellX < gridDimensions.X && cellY >= 0 && cellY < gridDimensions.Y && cellZ >= 0 && cellZ < gridDimensions.Z)
+                {
+                    int currentCount = hostCellCounts[cellX, cellY, cellZ];
+                    if (currentCount < CELL_MAX_CAPACITY)
+                    {
+                        hostGridParticles[cellX, cellY, cellZ * CELL_MAX_CAPACITY + currentCount] = i;
+                        hostCellCounts[cellX, cellY, cellZ]++;
+                    }
+                }
+            }
+            //sending grid to the VRAM
+            gpuGridParticles.CopyFromCPU(hostGridParticles);
+            gpuCellCounts.CopyFromCPU(hostCellCounts);
             // --- Starting the CUDA kernels ---
+            //config saved to the struct so it can be passed to the GPU
+            FluidConfig config = new FluidConfig
+            {
+                MinX = box.MinX, MaxX = box.MaxX,
+                MinY = box.MinY, MaxY = box.MaxY,
+                MinZ = box.MinZ, MaxZ = box.MaxZ,
+                SmoothingRadius = smoothingRadius,
+                DensityKernelVolumeScale = densityKernelVolumeScale,
+                PressureKernelScale = pressureKernelScale,
+                ViscosityKernelVolume = viscosityKernelVolume,
+                TargetDensity = targetDensity,
+                PressureMultiplier = pressureMultiplier,
+                ViscosityStrength = viscosityStrength,
+                GridDimensions = gridDimensions,
+                GridMin = gridMin
+            };
             //Calculating the density for all the particles
-            densityKernel((int)gpuParticlesBuffer.Length, gpuParticlesBuffer.View, smoothingRadius, densityKernelVolumeScale);
+            densityKernel(gridExtent, gpuParticlesBuffer.View, gpuGridParticles.View, gpuCellCounts.View, CELL_MAX_CAPACITY, config);
             // Calculating forces and updating the positions
-            positionKernel(
-                (int)gpuParticlesBuffer.Length, 
-                gpuParticlesBuffer.View, 
-                box.MinX, box.MaxX, box.MinY, box.MaxY, box.MinZ, box.MaxZ,
-                smoothingRadius, pressureKernelScale, viscosityKernelVolume,
-                targetDensity, pressureMultiplier, viscosityStrength, dt
-            );
+            positionKernel(gridExtent, gpuParticlesBuffer.View, gpuGridParticles.View, gpuCellCounts.View, CELL_MAX_CAPACITY, config, dt);
             //Waiting for the frame calculations (synchronization of the GPU accelerator)
             accelerator.Synchronize();
             //Copy data from device to the CPU for rendering needs
             gpuParticlesBuffer.CopyToCPU(hostParticles);
             // --- Render loop code ---
-            
+            /*
             GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit); //clearing buffer with color
             //Updating particles cell location
             // --- Rendering Particles ---
@@ -308,7 +353,7 @@ class Program
                 Toolkit.Window.SetTitle(window, $"Time: {frameTimeMs:F3} ms | Instant FPS: {instantFps:F0}");
                 Console.WriteLine($"Time: {frameTimeMs:F3} ms | Instant FPS: {instantFps:F0}");
                 titleUpdateTimer = 0f;
-            }
+            }/*
             // --- Rendering Bounding box ---
             boundShader.Use(); //Shader for bounding box
             GL.BindVertexArray(boundVao); //using correct Vao
