@@ -12,7 +12,7 @@ class Program
 {
     private static int screenHeight = 720;
     private static int screenWidth = 1280;
-    private static int particleAmount = 16000;
+    private static int particleAmount = 000;
     
     private static float smoothingRadius = 0.5f;
     //variables based on smoothingRadius
@@ -246,16 +246,43 @@ class Program
             //GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit); //clearing buffer with color
             //Updating particles cell location
             UpdateSpatialGrid(particles); //sequential preparing fo data
+            int threadsCount = Environment.ProcessorCount;
+            int chunkSize = particleAmount / threadsCount;
             //calculating density for all particles PARALLEL
-            Parallel.ForEach(particles, particle =>
+            Task[] densityTasks = new Task[threadsCount];
+            for (int i = 0; i < threadsCount; i++)
             {
-                particle.UpdateDensity(particles);
-            });
+                int threadId = i;
+                densityTasks[i] = Task.Run(() =>
+                {
+                    int start = threadId * chunkSize;
+                    int end = (threadId == threadsCount - 1) ? particleAmount : start + chunkSize;
+
+                    for (int j = start; j < end; j++)
+                    {
+                        particles[j].UpdateDensity(particles);
+                    }
+                });
+            }
+            Task.WaitAll(densityTasks); //wait for all cores to finish
             //calculating position and physics for particles PARALLEL
-            Parallel.ForEach(particles, particle =>
+            Task[] positionTasks = new Task[threadsCount];
+            for (int i = 0; i < threadsCount; i++)
             {
-                particle.UpdatePosition(box, particles, dt);
-            });/*
+                int threadId = i;
+                positionTasks[i] = Task.Run(() =>
+                {
+                    int start = threadId * chunkSize;
+                    int end = (threadId == threadsCount - 1) ? particleAmount : start + chunkSize;
+
+                    for (int j = start; j < end; j++)
+                    {
+                        particles[j].UpdatePosition(box, particles, dt);
+                    }
+                });
+            }
+            Task.WaitAll(densityTasks); //wait for all cores to finish
+            /*
             // --- Rendering Particles ---
             particleShader.Use(); //Shader for particles
             GL.BindVertexArray(particleVao); //using correct Vao
