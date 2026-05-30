@@ -15,7 +15,7 @@ class Program
 {
     private static int screenHeight = 720;
     private static int screenWidth = 1280;
-    private static int particleAmount = 75000;
+    private static int particleAmount = 1000;
     
     private static float smoothingRadius = 0.5f;
     //variables based on smoothingRadius
@@ -318,7 +318,6 @@ class Program
             //Copy data from device to the CPU for rendering needs
             gpuParticlesBuffer.CopyToCPU(hostParticles);
             // --- Render loop code ---
-            /*
             GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit); //clearing buffer with color
             //Updating particles cell location
             // --- Rendering Particles ---
@@ -341,7 +340,7 @@ class Program
 
                 GL.UniformMatrix4f(modelUniformParticle, 1, true, ref model);
                 GL.DrawElements(PrimitiveType.Triangles, indices.Length, DrawElementsType.UnsignedInt, 0);
-            } //*/
+            }
             //Time elapsed
             frameTimer.Stop();
             double frameTimeMs = frameTimer.Elapsed.TotalMilliseconds;
@@ -353,7 +352,7 @@ class Program
                 Toolkit.Window.SetTitle(window, $"Time: {frameTimeMs:F3} ms | Instant FPS: {instantFps:F0}");
                 Console.WriteLine($"Time: {frameTimeMs:F3} ms | Instant FPS: {instantFps:F0}");
                 titleUpdateTimer = 0f;
-            }/*
+            }
             // --- Rendering Bounding box ---
             boundShader.Use(); //Shader for bounding box
             GL.BindVertexArray(boundVao); //using correct Vao
