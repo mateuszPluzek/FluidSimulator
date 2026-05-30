@@ -15,7 +15,7 @@ class Program
 {
     private static int screenHeight = 720;
     private static int screenWidth = 1280;
-    private static int particleAmount = 50000; 
+    private static int particleAmount = 8000; 
     
     private static float smoothingRadius = 0.5f;
     private static float densityKernelVolumeScale;
