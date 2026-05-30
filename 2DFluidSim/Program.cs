@@ -3,7 +3,7 @@ using OpenTK.Platform;
 using OpenTK.Graphics.OpenGL;
 using System.Diagnostics;
 using OpenTK.Windowing.Common;
-using System.Threading.Tasks;
+using System.Runtime.InteropServices;
 using ILGPU;
 using ILGPU.Runtime;
 using ILGPU.Runtime.Cuda;
@@ -15,10 +15,9 @@ class Program
 {
     private static int screenHeight = 720;
     private static int screenWidth = 1280;
-    private static int particleAmount = 1000;
+    private static int particleAmount = 50000; 
     
     private static float smoothingRadius = 0.5f;
-    //variables based on smoothingRadius
     private static float densityKernelVolumeScale;
     private static float pressureKernelScale;
     private static float viscosityKernelVolume;
@@ -28,144 +27,97 @@ class Program
     public static float viscosityStrength = 0.045f;
 
     private const int CELL_MAX_CAPACITY = 64;
-    
-    // Spatial Hash Grid For Determining particles cell - READONLY when using parallel
-    private static Dictionary<Vector3i, List<FluidParticle>> spatialGrid = new();
-    // Static neighbour List
-    private static List<FluidParticle> neighborCache = new List<FluidParticle>(500);
+
     static void Main()
     {
-        // --- Cuda Setup ---
-        //ILGPU initialization and CUDA drivers
-        using var cudaContext = Context.Create(builder => builder.Cuda());
-        var device = cudaContext.GetCudaDevice(0); //Getting GPU
-        using var accelerator = device.CreateAccelerator(cudaContext);
-        //Compilation JIT of C# kernel for GPU code (compiling kernels)
-        var densityKernel = accelerator.LoadAutoGroupedStreamKernel(
-            (Action<Index1D, ArrayView<GpuParticle>, ArrayView3D<int, Stride3D.DenseXY>, ArrayView3D<int, Stride3D.DenseXY>, int, FluidConfig>)
-            FluidKernels.ComputeDensityKernel);
+        // --- OpenGL Setup ---
+        ToolkitOptions tkOptions = new ToolkitOptions();
+        Toolkit.Init(tkOptions);
+        OpenGLGraphicsApiHints apiHints = new OpenGLGraphicsApiHints();
+        WindowHandle window = Toolkit.Window.Create(apiHints);
+        OpenGLContextHandle context = Toolkit.OpenGL.CreateFromWindow(window);
+        Toolkit.OpenGL.SetCurrentContext(context);
+        OpenTK.Graphics.GLLoader.LoadBindings(Toolkit.OpenGL.GetBindingsContext(context));
         
-        var positionKernel = accelerator.LoadAutoGroupedStreamKernel(
-            (Action<Index1D, ArrayView<GpuParticle>, ArrayView3D<int, Stride3D.DenseXY>, ArrayView3D<int, Stride3D.DenseXY>, int, FluidConfig, float>)
-            FluidKernels.UpdatePositionsKernel);
-        //Calculating Pow of Radius
+        Toolkit.Window.SetMode(window, WindowMode.Normal);
+        Toolkit.Window.SetSize(window, new Vector2i(screenWidth, screenHeight));
+        Toolkit.Window.SetTitle(window, "3D Fluid Sim - Method 1 (No-Alloc Zero-Unsafe Bridge)");
+        GL.Viewport(0, 0, screenWidth, screenHeight);
+
+        // --- Cuda Setup ---
+        using var cudaContext = Context.Create(builder => builder.Cuda());
+        var device = cudaContext.GetCudaDevice(0);
+        using var accelerator = device.CreateAccelerator(cudaContext);
+        
+        var densityKernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<GpuParticle>, ArrayView<int>, ArrayView<int>, int, FluidConfig
+        >(FluidKernels.ComputeDensityKernel);
+        
+        var positionKernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<GpuParticle>, ArrayView<int>, ArrayView<int>, int, FluidConfig, float
+        >(FluidKernels.UpdatePositionsKernel);
+
         float r = smoothingRadius;
         densityKernelVolumeScale = 10f / (Single.Pi * float.Pow(r, 5));
         pressureKernelScale = 30f / (float.Pow(r, 5) * Single.Pi);
         viscosityKernelVolume = (2f * Single.Pi * float.Pow(r, 5)) / 15f;
-        // --- OpenGL Setup ---
-        //Toolkit setup
-        ToolkitOptions tkOptions = new ToolkitOptions();
-        Toolkit.Init(tkOptions);
-        //OpenGL API
-        OpenGLGraphicsApiHints apiHints = new OpenGLGraphicsApiHints();
-        WindowHandle window = Toolkit.Window.Create(apiHints);
-        OpenGLContextHandle context = Toolkit.OpenGL.CreateFromWindow(window);
-        //Binding context to the Window
-        Toolkit.OpenGL.SetCurrentContext(context);
-        OpenTK.Graphics.GLLoader.LoadBindings(Toolkit.OpenGL.GetBindingsContext(context));
-        //window options
-        Toolkit.Window.SetMode(window, WindowMode.Normal); //Setting window mode to normal
-        Toolkit.Window.SetSize(window, new Vector2i(screenWidth,screenHeight));
-        Toolkit.Window.SetTitle(window, "3D Fluid Sim CUDA");
-        GL.Viewport(0, 0, screenWidth,screenHeight); //important!!!
+
         // --- Camera Setup ---
         Toolkit.Window.GetClientSize(window, out Vector2i clientSize);
         Camera camera = new Camera((float)clientSize.X / clientSize.Y);
         CursorHandle defaultCursor = Toolkit.Cursor.Create(SystemCursorType.Default);
         bool grabbed = false;
-        Vector2 last = Vector2.Zero; // vector that stores last mouse position
-        // --- movement map ---
+        Vector2 last = Vector2.Zero;
+        
         Dictionary<Scancode, bool> keysPressed = new Dictionary<Scancode, bool>()
         {
-            { Scancode.W, false },
-            { Scancode.S, false },
-            { Scancode.A, false },
-            { Scancode.D, false },
-            { Scancode.Q, false },
-            { Scancode.E, false }
+            { Scancode.W, false }, { Scancode.S, false }, { Scancode.A, false },
+            { Scancode.D, false }, { Scancode.Q, false }, { Scancode.E, false }
         };
-        //event queue
+
         void HandleEvents(PalHandle? handle, PlatformEventType type, EventArgs args)
         {
             switch (args)
             {
-                case CloseEventArgs closeEvent:
+                case CloseEventArgs:
                     Toolkit.Window.Destroy(window);
                     break;
-                
                 case MouseMoveEventArgs mouseMove:
                     Vector2 diff = mouseMove.ClientPosition - last;
-                    if (grabbed)
-                    {
-                        camera.Look(diff / 1000f);
-                    }
+                    if (grabbed) camera.Look(diff / 1000f);
                     last = mouseMove.ClientPosition;
                     break;
-                
                 case KeyDownEventArgs keyDown:
-                    if(keyDown.IsRepeat) break;
-                    if (keysPressed.ContainsKey(keyDown.Scancode))
+                    if (keyDown.IsRepeat) break;
+                    if (keysPressed.ContainsKey(keyDown.Scancode)) keysPressed[keyDown.Scancode] = true;
+                    if (keyDown.Scancode == Scancode.LeftAlt)
                     {
-                        keysPressed[keyDown.Scancode] = true;
-                    }
-                    switch (keyDown.Scancode)
-                    {
-                        case Scancode.LeftAlt:
-                            Toolkit.Window.SetCursorCaptureMode(window, CursorCaptureMode.Locked);
-                            Toolkit.Window.SetCursor(window, null);
-                            grabbed = true;
-                            break;
+                        Toolkit.Window.SetCursorCaptureMode(window, CursorCaptureMode.Locked);
+                        Toolkit.Window.SetCursor(window, null);
+                        grabbed = true;
                     }
                     break;
-                
                 case KeyUpEventArgs keyUp:
-                    if (keysPressed.ContainsKey(keyUp.Scancode))
+                    if (keysPressed.ContainsKey(keyUp.Scancode)) keysPressed[keyUp.Scancode] = false;
+                    if (keyUp.Scancode == Scancode.LeftAlt)
                     {
-                        keysPressed[keyUp.Scancode] = false;
-                    }
-
-                    switch (keyUp.Scancode)
-                    {
-                        case Scancode.LeftAlt:
-                            Toolkit.Window.SetCursorCaptureMode(window, CursorCaptureMode.Normal);
-                            Toolkit.Window.SetCursor(window, defaultCursor);
-                            grabbed = false;
-                            break;
+                        Toolkit.Window.SetCursorCaptureMode(window, CursorCaptureMode.Normal);
+                        Toolkit.Window.SetCursor(window, defaultCursor);
+                        grabbed = false;
                     }
                     break;
-                
             }
         }
         EventQueue.EventRaised += HandleEvents;
         
-        // --- Objects ---
-        //Bounding Box
+        // --- Objects & Grid Config ---
         BoundingBox3D box = new BoundingBox3D(-3.5f, 3.5f, -3.0f, 3.0f, -4.0f, 4.0f);
-        Vector3[] boxVertices = new Vector3[]
-        {
-            // Bottom 
-            new Vector3(box.MinX, box.MinY, box.MinZ),
-            new Vector3(box.MaxX, box.MinY, box.MinZ),
-            new Vector3(box.MaxX, box.MinY, box.MaxZ),
-            new Vector3(box.MinX, box.MinY, box.MaxZ),
-            new Vector3(box.MinX, box.MinY, box.MinZ),
-            //Connect top from bottom
-            new Vector3(box.MinX, box.MaxY, box.MinZ),
-            // Top
-            new Vector3(box.MaxX, box.MaxY, box.MinZ),
-            new Vector3(box.MaxX, box.MaxY, box.MaxZ),
-            new Vector3(box.MinX, box.MaxY, box.MaxZ),
-            new Vector3(box.MinX, box.MaxY, box.MinZ),
-            //Rest
-            new Vector3(box.MaxX, box.MaxY, box.MinZ),
-            new Vector3(box.MaxX, box.MinY, box.MinZ),
-            new Vector3(box.MaxX, box.MinY, box.MaxZ),
-            new Vector3(box.MaxX, box.MaxY, box.MaxZ),
-            new Vector3(box.MinX, box.MaxY, box.MaxZ),
-            new Vector3(box.MinX, box.MinY, box.MaxZ)
+        Vector3[] boxVertices = {
+            new(-3.5f, -3.0f, -4.0f), new(3.5f, -3.0f, -4.0f), new(3.5f, -3.0f, 4.0f), new(-3.5f, -3.0f, 4.0f), new(-3.5f, -3.0f, -4.0f),
+            new(-3.5f, 3.0f, -4.0f),  new(3.5f, 3.0f, -4.0f),  new(3.5f, 3.0f, 4.0f),  new(-3.5f, 3.0f, 4.0f),  new(-3.5f, 3.0f, -4.0f),
+            new(3.5f, 3.0f, -4.0f),   new(3.5f, -3.0f, -4.0f), new(3.5f, -3.0f, 4.0f),  new(3.5f, 3.0f, 4.0f),   new(-3.5f, 3.0f, 4.0f),  new(-3.5f, -3.0f, 4.0f)
         };
-        // Static dimensions of spatial grid cells based on the bounding box
+
         Vector3 gridMin = new Vector3(box.MinX - 0.5f, box.MinY - 0.5f, box.MinZ - 0.5f);
         Vector3 gridMax = new Vector3(box.MaxX + 0.5f, box.MaxY + 0.5f, box.MaxZ + 0.5f);
         Vector3i gridDimensions = new Vector3i(
@@ -173,197 +125,197 @@ class Program
             (int)MathF.Ceiling((gridMax.Y - gridMin.Y) / smoothingRadius),
             (int)MathF.Ceiling((gridMax.Z - gridMin.Z) / smoothingRadius)
         );
-        // arrays for the spatial grid
-        int[,,] hostGridParticles = new int[gridDimensions.X, gridDimensions.Y, gridDimensions.Z * CELL_MAX_CAPACITY];
-        int[,,] hostCellCounts = new int[gridDimensions.X, gridDimensions.Y, gridDimensions.Z];
-        //Fluid particles (static array for CPU memory)
+
+        int totalCells = gridDimensions.X * gridDimensions.Y * gridDimensions.Z;
+        int[] hostGridParticles = new int[totalCells * CELL_MAX_CAPACITY];
+        int[] hostCellCounts = new int[totalCells];
+
         GpuParticle[] hostParticles = new GpuParticle[particleAmount];
         Random random = new Random();
         for (int i = 0; i < particleAmount; i++)
         {
             hostParticles[i].Position = new Vector3(
-                box.MinX + 0.5f + (float)random.NextDouble() * 1.5f,
-                box.MaxY - 1.5f + (float)random.NextDouble() * 1.0f,
-                box.MinZ + 0.5f + (float)random.NextDouble() * 2.0f
+                box.MinX + 0.5f + (float)random.NextDouble() * 2.0f,
+                box.MaxY - 1.5f + (float)random.NextDouble() * 1.5f,
+                box.MinZ + 0.5f + (float)random.NextDouble() * 3.0f
             );
             hostParticles[i].Velocity = Vector3.Zero;
             hostParticles[i].Mass = 1.0f;
         }
-        // Allocation of memory buffer in VRAM
-        using MemoryBuffer1D<GpuParticle, Stride1D.Dense> gpuParticlesBuffer = accelerator.Allocate1D(hostParticles);
-        using MemoryBuffer3D<int, Stride3D.DenseXY> gpuGridParticles = accelerator.Allocate3DDenseXY<int>(new LongIndex3D(gridDimensions.X, gridDimensions.Y, gridDimensions.Z * CELL_MAX_CAPACITY));
-        using MemoryBuffer3D<int, Stride3D.DenseXY> gpuCellCounts = accelerator.Allocate3DDenseXY<int>(new LongIndex3D(gridDimensions.X, gridDimensions.Y, gridDimensions.Z)); 
+
+        using MemoryBuffer1D<int, Stride1D.Dense> gpuGridParticles = accelerator.Allocate1D<int>(hostGridParticles.Length);
+        using MemoryBuffer1D<int, Stride1D.Dense> gpuCellCounts = accelerator.Allocate1D<int>(hostCellCounts.Length);
+
+        // --- ALOKACJA BUFORA PO STRONIE ILGPU ---
+        using MemoryBuffer1D<GpuParticle, Stride1D.Dense> gpuParticlesBuffer = accelerator.Allocate1D<GpuParticle>(particleAmount);
+        gpuParticlesBuffer.CopyFromCPU(hostParticles);
+
+        ArrayView<GpuParticle> mainBufferView = gpuParticlesBuffer.View;
         
-        //Single particle sphere
-        var sphereData = GenerateSphere(1.0f, 16, 16);
+        int particleStructSize = Marshal.SizeOf<GpuParticle>();
+        int totalBufferSizeInBytes = particleAmount * particleStructSize;
+
+        // --- INICJALIZACJA OPENGL VBO ---
+        int particleVbo = GL.GenBuffer();
+        GL.BindBuffer(BufferTarget.ArrayBuffer, particleVbo);
+        GL.BufferData(BufferTarget.ArrayBuffer, totalBufferSizeInBytes, IntPtr.Zero, BufferUsage.StreamDraw);
+
+        var sphereData = GenerateSphere(1.0f, 8, 8);
         Vector3[] vertices = sphereData.Vertices;
         uint[] indices = sphereData.Indices;
         
-        // --- Setup Code ---
-        //Particle Shader
         ParticleShader particleShader = new ParticleShader();
         particleShader.Setup();
-        //Bounding Shader
         BoundShader boundShader = new BoundShader();
         boundShader.Setup();
         
-        GL.ClearColor(0.1f, 0.1f, 0.1f, 1.0f); //background
-        GL.Enable(EnableCap.DepthTest); //Enables Depth Test for correct rendering
-        // --- Vertex Array Object Setup ---
-        //VAO (references objects)
+        GL.ClearColor(0.05f, 0.05f, 0.08f, 1.0f);
+        GL.Enable(EnableCap.DepthTest);
+
         int particleVao = GL.GenVertexArray();
         int boundVao = GL.GenVertexArray();
-        //VBO (buffer for VAO that stores the actual data)
-        int particleVbo = GL.GenBuffer();
+        int sphereVbo = GL.GenBuffer();
         int boundVbo = GL.GenBuffer();
-        //EBO (index buffer for spheres)
         int particleEbo = GL.GenBuffer();
-        //shaders
-        uint particlePosition = (uint)GL.GetAttribLocation(particleShader.Id, "vPosition"); //getting index of the field from OpenGL
-        uint boundPosition = (uint)GL.GetAttribLocation(boundShader.Id, "vPosition");
-        //connecting openGL shaders and vbo
-        //Particle
+
+        // Konfiguracja Instanced Renderingu w VAO
         GL.BindVertexArray(particleVao);
-        GL.BindBuffer(BufferTarget.ArrayBuffer, particleVbo);
-        GL.BufferData(BufferTarget.ArrayBuffer, vertices.Length * Vector3.SizeInBytes, vertices, BufferUsage.StaticDraw);
-        GL.VertexAttribPointer(particlePosition, 3, VertexAttribPointerType.Float, false, sizeof(float) * 3, 0);
-        GL.EnableVertexAttribArray(particlePosition); //telling openGL that data is coming from VAO
         
+        GL.BindBuffer(BufferTarget.ArrayBuffer, sphereVbo);
+        GL.BufferData(BufferTarget.ArrayBuffer, vertices.Length * Vector3.SizeInBytes, vertices, BufferUsage.StaticDraw);
+        GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, sizeof(float) * 3, 0);
+        GL.EnableVertexAttribArray(0);
+
+        GL.BindBuffer(BufferTarget.ArrayBuffer, particleVbo);
+        
+        // GpuParticle.Position (offset = 0)
+        GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, particleStructSize, 0);
+        GL.EnableVertexAttribArray(1);
+        GL.VertexAttribDivisor(1, 1);
+
+        // GpuParticle.Velocity (offset = 12 bajtów)
+        GL.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, particleStructSize, 12);
+        GL.EnableVertexAttribArray(2);
+        GL.VertexAttribDivisor(2, 1);
+
         GL.BindBuffer(BufferTarget.ElementArrayBuffer, particleEbo);
         GL.BufferData(BufferTarget.ElementArrayBuffer, indices.Length * sizeof(uint), indices, BufferUsage.StaticDraw);
-        //Bounding box
+
+        // Bounding Box
         GL.BindVertexArray(boundVao);
         GL.BindBuffer(BufferTarget.ArrayBuffer, boundVbo);
         GL.BufferData(BufferTarget.ArrayBuffer, boxVertices.Length * Vector3.SizeInBytes, boxVertices, BufferUsage.StaticDraw);
-        GL.VertexAttribPointer(boundPosition, 3, VertexAttribPointerType.Float, false, sizeof(float) * 3, 0);
-        GL.EnableVertexAttribArray(boundPosition); //telling openGL that data is coming from VAO
-        //Identity matrix for perspective
+        GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, sizeof(float) * 3, 0);
+        GL.EnableVertexAttribArray(0);
+
         Matrix4 identity = Matrix4.Identity;
-        //getting uniforms index
         int viewUniformParticle = GL.GetUniformLocation(particleShader.Id, "view");
         int projectionUniformParticle = GL.GetUniformLocation(particleShader.Id, "projection");
-        int modelUniformParticle = GL.GetUniformLocation(particleShader.Id, "model");
-        int speedUniformParticle = GL.GetUniformLocation(particleShader.Id, "uSpeed");
-        
         int viewUniformBound = GL.GetUniformLocation(boundShader.Id, "view");
         int projectionUniformBound = GL.GetUniformLocation(boundShader.Id, "projection");
         int modelUniformBound = GL.GetUniformLocation(boundShader.Id, "model");
         
-        // --- Delta time ---
-        //calculating FPS and delta time for smooth simulation
         Stopwatch stopwatch = new Stopwatch();
         Stopwatch frameTimer = new Stopwatch();
         stopwatch.Start();
         float lastTime = 0f;
-        //FPS variable
         float titleUpdateTimer = 0f;
-        // --- Main Loop ---
-        Index1D gridExtent = new Index1D(particleAmount); //the amount of threads needed for the spatial grid
+        Index1D gridExtent = new Index1D(particleAmount);
+
+        // Stały bufor synchronizacyjny na CPU – alokowany RAZ, wielokrotnie używany
+        GpuParticle[] tempCpuSyncArray = new GpuParticle[particleAmount];
+
         while (true)
         {
-            // --- DELTA TIME ---
-            // Calculating Delta Time
             float currentTime = (float)stopwatch.Elapsed.TotalSeconds;
             float dt = currentTime - lastTime;
             lastTime = currentTime;
-            // Cap for safety
-            if (dt > 0.1f) dt = 0.1f;
-            //FPS calculation
+            if (dt > 0.05f) dt = 0.05f;
+
             frameTimer.Restart();
-            //-- Spatial Grid calculations on the CPU ---
+
+            // --- KROK 1: ŚCIĄGNIĘCIE DANYCH DO REUZYWALNEJ TABLICY ---
+            mainBufferView.CopyToCPU(tempCpuSyncArray);
+
+            // Przeliczanie siatki przestrzennej na CPU przy użyciu tej samej tablicy
             Array.Clear(hostCellCounts, 0, hostCellCounts.Length);
             for (int i = 0; i < particleAmount; i++)
             {
-                int cellX = (int)MathF.Floor((hostParticles[i].Position.X - gridMin.X) / smoothingRadius);
-                int cellY = (int)MathF.Floor((hostParticles[i].Position.Y - gridMin.Y) / smoothingRadius);
-                int cellZ = (int)MathF.Floor((hostParticles[i].Position.Z - gridMin.Z) / smoothingRadius);
+                int cellX = (int)MathF.Floor((tempCpuSyncArray[i].Position.X - gridMin.X) / smoothingRadius);
+                int cellY = (int)MathF.Floor((tempCpuSyncArray[i].Position.Y - gridMin.Y) / smoothingRadius);
+                int cellZ = (int)MathF.Floor((tempCpuSyncArray[i].Position.Z - gridMin.Z) / smoothingRadius);
 
-                // validation of spatial grid indexes
                 if (cellX >= 0 && cellX < gridDimensions.X && cellY >= 0 && cellY < gridDimensions.Y && cellZ >= 0 && cellZ < gridDimensions.Z)
                 {
-                    int currentCount = hostCellCounts[cellX, cellY, cellZ];
+                    int cellLinearIndex = cellX + cellY * gridDimensions.X + cellZ * gridDimensions.X * gridDimensions.Y;
+                    int currentCount = hostCellCounts[cellLinearIndex];
                     if (currentCount < CELL_MAX_CAPACITY)
                     {
-                        hostGridParticles[cellX, cellY, cellZ * CELL_MAX_CAPACITY + currentCount] = i;
-                        hostCellCounts[cellX, cellY, cellZ]++;
+                        hostGridParticles[cellLinearIndex * CELL_MAX_CAPACITY + currentCount] = i;
+                        hostCellCounts[cellLinearIndex]++;
                     }
                 }
             }
-            //sending grid to the VRAM
             gpuGridParticles.CopyFromCPU(hostGridParticles);
             gpuCellCounts.CopyFromCPU(hostCellCounts);
-            // --- Starting the CUDA kernels ---
-            //config saved to the struct so it can be passed to the GPU
+
             FluidConfig config = new FluidConfig
             {
-                MinX = box.MinX, MaxX = box.MaxX,
-                MinY = box.MinY, MaxY = box.MaxY,
-                MinZ = box.MinZ, MaxZ = box.MaxZ,
-                SmoothingRadius = smoothingRadius,
-                DensityKernelVolumeScale = densityKernelVolumeScale,
-                PressureKernelScale = pressureKernelScale,
-                ViscosityKernelVolume = viscosityKernelVolume,
-                TargetDensity = targetDensity,
-                PressureMultiplier = pressureMultiplier,
-                ViscosityStrength = viscosityStrength,
-                GridDimensions = gridDimensions,
-                GridMin = gridMin
+                MinX = box.MinX, MaxX = box.MaxX, MinY = box.MinY, MaxY = box.MaxY, MinZ = box.MinZ, MaxZ = box.MaxZ,
+                SmoothingRadius = smoothingRadius, DensityKernelVolumeScale = densityKernelVolumeScale,
+                PressureKernelScale = pressureKernelScale, ViscosityKernelVolume = viscosityKernelVolume,
+                TargetDensity = targetDensity, PressureMultiplier = pressureMultiplier, ViscosityStrength = viscosityStrength,
+                GridDimensions = gridDimensions, GridMin = gridMin
             };
-            //Calculating the density for all the particles
-            densityKernel(gridExtent, gpuParticlesBuffer.View, gpuGridParticles.View, gpuCellCounts.View, CELL_MAX_CAPACITY, config);
-            // Calculating forces and updating the positions
-            positionKernel(gridExtent, gpuParticlesBuffer.View, gpuGridParticles.View, gpuCellCounts.View, CELL_MAX_CAPACITY, config, dt);
-            //Waiting for the frame calculations (synchronization of the GPU accelerator)
+
+            // Wykonanie fizyki w pamięci GPU
+            densityKernel(gridExtent, mainBufferView, gpuGridParticles.View, gpuCellCounts.View, CELL_MAX_CAPACITY, config);
+            positionKernel(gridExtent, mainBufferView, gpuGridParticles.View, gpuCellCounts.View, CELL_MAX_CAPACITY, config, dt);
+            
+            // Konieczna synchronizacja przed przesłaniem danych do renderu
             accelerator.Synchronize();
-            //Copy data from device to the CPU for rendering needs
-            gpuParticlesBuffer.CopyToCPU(hostParticles);
-            // --- Render loop code ---
-            GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit); //clearing buffer with color
-            //Updating particles cell location
-            // --- Rendering Particles ---
-            particleShader.Use(); //Shader for particles
-            GL.BindVertexArray(particleVao); //using correct Vao
-            //Projection info
-            GL.UniformMatrix4f(projectionUniformParticle, 1, true, camera.Projection);
-            GL.UniformMatrix4f(viewUniformParticle, 1, true, camera.View);
-            //Draw every particle 
-            for (int i = 0; i < particleAmount; i++)
-            {
-                float speed = hostParticles[i].Velocity.Length;
-                float maxExpectedSpeed = 3.0f;
-                float normalizedSpeed = speed / maxExpectedSpeed;
-                GL.Uniform1f(speedUniformParticle, normalizedSpeed);
 
-                Matrix4 scale = Matrix4.CreateScale(0.05f); // TODO make particle radius a variable
-                Matrix4 translate = Matrix4.CreateTranslation(hostParticles[i].Position);
-                Matrix4 model = scale * translate;
+            // --- KROK 2: METODA 1 – REUZYWALNA TABLICA TRAFIA DO OPENGL ---
+            // Ponieważ dane z GPU zostały zaktualizowane, musimy ponownie pobrać stan końcowy fizyki do naszej tablicy...
+            mainBufferView.CopyToCPU(tempCpuSyncArray);
 
-                GL.UniformMatrix4f(modelUniformParticle, 1, true, ref model);
-                GL.DrawElements(PrimitiveType.Triangles, indices.Length, DrawElementsType.UnsignedInt, 0);
-            }
-            //Time elapsed
+            // ...i natychmiast wysłać ją bezpośrednio do VBO OpenGL bez żadnych dodatkowych alokacji w pętli!
+            GL.BindBuffer(BufferTarget.ArrayBuffer, particleVbo);
+            GL.BufferSubData(BufferTarget.ArrayBuffer, IntPtr.Zero, totalBufferSizeInBytes, tempCpuSyncArray);
+
+            // --- RENDEROWANIE ---
+            GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+
+            particleShader.Use();
+            GL.BindVertexArray(particleVao);
+            
+            GL.UniformMatrix4f(projectionUniformParticle, 1, false, camera.Projection);
+            GL.UniformMatrix4f(viewUniformParticle, 1, false, camera.View);
+
+            GL.DrawElementsInstanced(PrimitiveType.Triangles, indices.Length, DrawElementsType.UnsignedInt, IntPtr.Zero, particleAmount);
+
             frameTimer.Stop();
             double frameTimeMs = frameTimer.Elapsed.TotalMilliseconds;
-            double instantFps = frameTimeMs > 0.0 ? 1000.0 / frameTimeMs : 99999.0;
-            //--- Print FPS ---
+            double instantFps = frameTimeMs > 0.0 ? 1000.0 / frameTimeMs : 9999.0;
+
             titleUpdateTimer += dt;
             if (titleUpdateTimer >= 0.1f)
             {
-                Toolkit.Window.SetTitle(window, $"Time: {frameTimeMs:F3} ms | Instant FPS: {instantFps:F0}");
-                Console.WriteLine($"Time: {frameTimeMs:F3} ms | Instant FPS: {instantFps:F0}");
+                Toolkit.Window.SetTitle(window, $"Frame Total: {frameTimeMs:F2} ms | FPS: {instantFps:F0}");
+                Console.WriteLine($"Frame Total: {frameTimeMs:F2} ms | FPS: {instantFps:F0}");
                 titleUpdateTimer = 0f;
             }
-            // --- Rendering Bounding box ---
-            boundShader.Use(); //Shader for bounding box
-            GL.BindVertexArray(boundVao); //using correct Vao
-            //Projection info
-            GL.UniformMatrix4f(projectionUniformBound, 1, true, camera.Projection);
-            GL.UniformMatrix4f(viewUniformBound, 1, true, camera.View);
+
+            // Renderowanie Bounding Boxa
+            boundShader.Use();
+            GL.BindVertexArray(boundVao);
+            GL.UniformMatrix4f(projectionUniformBound, 1, false, camera.Projection);
+            GL.UniformMatrix4f(viewUniformBound, 1, false, camera.View);
             GL.UniformMatrix4f(modelUniformBound, 1, false, ref identity);
             GL.DrawArrays(PrimitiveType.LineStrip, 0, boxVertices.Length);
             
-            Toolkit.OpenGL.SwapBuffers(context); //swap back and front buffers*/
-            // --- Camera movement ---
+            Toolkit.OpenGL.SwapBuffers(context);
+
             Vector3 moveDirection = Vector3.Zero;
             if (keysPressed[Scancode.W]) moveDirection += new Vector3(0f, 0f, 1f);
             if (keysPressed[Scancode.S]) moveDirection += new Vector3(0f, 0f, -1f);
@@ -372,215 +324,49 @@ class Program
             if (keysPressed[Scancode.Q]) moveDirection += new Vector3(0f, 1f, 0f);
             if (keysPressed[Scancode.E]) moveDirection += new Vector3(0f, -1f, 0f);
 
-            if (moveDirection != Vector3.Zero)
-            {
-                // Adjust the multiplier value (e.g., 4.0f) to make the fly speed faster or slower
-                camera.Move(moveDirection * (4.0f * dt)); 
-            }
-            //Event Handling
+            if (moveDirection != Vector3.Zero) camera.Move(moveDirection * (4.0f * dt));
+
             Toolkit.Window.ProcessEvents(false);
-            if (Toolkit.Window.IsWindowDestroyed(window))
-            {
-                break;
-            }
+            if (Toolkit.Window.IsWindowDestroyed(window)) break;
         }
+
+        GL.DeleteBuffer(particleVbo);
+        GL.DeleteBuffer(sphereVbo);
     }
     
-    static (Vector3[] Vertices, uint[] Indices) GenerateSphere(float radius, int sectors = 16, int rings = 16)
+    static (Vector3[] Vertices, uint[] Indices) GenerateSphere(float radius, int sectors = 8, int rings = 8)
     {
         List<Vector3> vertices = new List<Vector3>();
         List<uint> indices = new List<uint>();
-
-        float lengthInv = 1.0f / radius;
         float sectorStep = 2 * MathF.PI / sectors;
         float ringStep = MathF.PI / rings;
 
         for (int i = 0; i <= rings; ++i)
         {
-            float ringAngle = MathF.PI / 2 - i * ringStep; // starting from pi/2 to -pi/2
-            float xy = radius * MathF.Cos(ringAngle);    // r * cos(u)
-            float z = radius * MathF.Sin(ringAngle);     // r * sin(u)
+            float ringAngle = MathF.PI / 2 - i * ringStep;
+            float xy = radius * MathF.Cos(ringAngle);
+            float z = radius * MathF.Sin(ringAngle);
 
             for (int j = 0; j <= sectors; ++j)
             {
-                float sectorAngle = j * sectorStep;      // starting from 0 to 2pi
-
-                float x = xy * MathF.Cos(sectorAngle);   // r * cos(u) * cos(v)
-                float y = xy * MathF.Sin(sectorAngle);   // r * cos(u) * sin(v)
+                float sectorAngle = j * sectorStep;
+                float x = xy * MathF.Cos(sectorAngle);
+                float y = xy * MathF.Sin(sectorAngle);
                 vertices.Add(new Vector3(x, y, z));
             }
         }
 
         for (int i = 0; i < rings; ++i)
         {
-            uint k1 = (uint)(i * (sectors + 1));     // beginning of current ring
-            uint k2 = (uint)(k1 + sectors + 1);      // beginning of next ring
+            uint k1 = (uint)(i * (sectors + 1));
+            uint k2 = (uint)(k1 + sectors + 1);
 
             for (int j = 0; j < sectors; ++j, ++k1, ++k2)
             {
-                // 2 triangles per sector except for the top and bottom poles
-                if (i != 0)
-                {
-                    indices.Add(k1);
-                    indices.Add(k2);
-                    indices.Add(k1 + 1);
-                }
-
-                if (i != (rings - 1))
-                {
-                    indices.Add(k1 + 1);
-                    indices.Add(k2);
-                    indices.Add(k2 + 1);
-                }
+                if (i != 0) { indices.Add(k1); indices.Add(k2); indices.Add(k1 + 1); }
+                if (i != (rings - 1)) { indices.Add(k1 + 1); indices.Add(k2); indices.Add(k2 + 1); }
             }
         }
-
         return (vertices.ToArray(), indices.ToArray());
     }
-    /*
-    // === Spatial Grid Code ===
-    private static void UpdateSpatialGrid(List<FluidParticle> particles)
-    {
-        //clearing list inside the dictionary
-        foreach (var cellList in spatialGrid.Values)
-        {
-            cellList.Clear();
-        }
-
-        foreach (var particle in particles)
-        {
-            Vector3i cellKey = GetCellKey(particle.CurrentPosition);
-            if (!spatialGrid.TryGetValue(cellKey, out var cellList))
-            {
-                // new list are only created when cell first appears in the simulation
-                cellList = new List<FluidParticle>(32);
-                spatialGrid[cellKey] = cellList;
-            }
-            cellList.Add(particle);
-        }
-    }
-    
-    public static Vector3i GetCellKey(Vector3 position)
-    {
-        return new Vector3i(
-            (int)MathF.Floor(position.X / smoothingRadius),
-            (int)MathF.Floor(position.Y / smoothingRadius),
-            (int)MathF.Floor(position.Z / smoothingRadius)
-        );
-    }
-    
-    public static List<FluidParticle> GetNearbyNeighbors(Vector3 position) //Returns local allocation for the thread
-{
-        List<FluidParticle> neighbors = new List<FluidParticle>(64);
-        Vector3i centerKey = GetCellKey(position);
-
-        for (int x = -1; x <= 1; x++)
-        {
-            for (int y = -1; y <= 1; y++)
-            {
-                for (int z = -1; z <= 1; z++)
-                {
-                    Vector3i targetKey = new Vector3i(centerKey.X + x, centerKey.Y + y, centerKey.Z + z);
-                    
-                    // Bezpieczne, ponieważ struktura słownika nie zmienia się w tym kroku
-                    if (spatialGrid.TryGetValue(targetKey, out var cellParticles))
-                    {
-                        neighbors.AddRange(cellParticles);
-                    }
-                }
-            }
-        }
-        return neighbors;
-    }
-    // === density calcualtions ===
-    public static float SmoothingKernel(float radius, float dst)
-    {
-        if (dst >= radius) return 0;
-        float diff = radius - dst;
-        return (diff * diff * diff) * densityKernelVolumeScale;
-    }
-    //derivative of smoothing kernel used for getting the slope
-    public static float SmoothingKernelDerivative(float radius, float dst)
-    {
-        if (dst >= radius) return 0;
-        float diff = radius - dst;
-        return -(diff * diff) * pressureKernelScale;
-    }
-
-    public static float CalculateDensity(Vector3 samplePoint)
-    {
-        float density = 0.0f;
-        var neighbours = GetNearbyNeighbors(samplePoint);
-        foreach (FluidParticle particle in neighbours)
-        {
-            float dst = (particle.CurrentPosition - samplePoint).Length;
-            float influence = SmoothingKernel(smoothingRadius, dst);
-            density += particle.Mass * influence;
-        }
-        return density;
-    }
-    // === pressure calculations ===
-    public static float ConvertDensityToPressure(float density)
-    {
-        float densityError = density - targetDensity;
-        float pressure = float.Max(0, densityError) * pressureMultiplier;
-        return pressure;
-    }
-    
-    // gradient calculations (how to change density)
-    public static Vector3 CalculatePressureForce(FluidParticle currentParticle)
-    {
-        Vector3 pressureForce = Vector3.Zero;
-        Vector3 samplePoint = currentParticle.CurrentPosition;
-
-        // Calculate the pressure of the current particle itself
-        float currentPressure = ConvertDensityToPressure(currentParticle.Density);
-
-        var neighbors = GetNearbyNeighbors(samplePoint);
-        foreach (FluidParticle neighbor in neighbors)
-        {
-            if (neighbor == currentParticle) continue; // Skip self
-            Vector3 offset = neighbor.CurrentPosition - samplePoint;
-            float dst = offset.Length;
-            if (dst >= smoothingRadius || dst == 0.0f) continue; //skip if outiside smoothing radius
-            Vector3 dir = offset / dst;
-
-            float slope = SmoothingKernelDerivative(smoothingRadius, dst);
-
-            float neighborPressure = ConvertDensityToPressure(neighbor.Density);
-            float sharedPressure = (currentPressure + neighborPressure) / 2.0f;
-            float neighborDensity = neighbor.Density <= 0.001f ? 0.001f : neighbor.Density;
-
-            pressureForce += dir * slope * sharedPressure * neighbor.Mass / neighborDensity;
-        }
-
-        return pressureForce;
-    }
-    
-    // === viscosity calculations ===
-    public static float ViscositySmoothingKernel(float radius, float dst)
-    {
-        if (dst >= radius) return 0;
-
-        return (radius - dst) / viscosityKernelVolume;
-    }
-    public static Vector3 CalculateViscosityForce(FluidParticle currentParticle)
-    {
-        Vector3 viscosityForce = Vector3.Zero;
-        Vector3 samplePoint = currentParticle.CurrentPosition;
-        var neighbors = GetNearbyNeighbors(samplePoint); //Now the particle looks at the neighbours based on the spatial hash
-        
-        foreach (FluidParticle neighbor in neighbors)
-        {
-            if (neighbor == currentParticle) continue; // Skip self
-            float dst = (samplePoint - neighbor.CurrentPosition).Length;
-            if (dst >= smoothingRadius || dst == 0.0f) continue;
-            float influence = ViscositySmoothingKernel(smoothingRadius, dst);
-            viscosityForce += (neighbor.Velocity - currentParticle.Velocity) * influence;
-        }
-        return viscosityForce * viscosityStrength;
-    }
-    
-    */
 }
-
