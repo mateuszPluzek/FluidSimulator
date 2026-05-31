@@ -12,8 +12,11 @@ public class Camera
     private Vector3 _up = Vector3.UnitY;
     private Vector3 _right = Vector3.UnitX;
     
-    public Matrix4 Projection {set; get;}
-    public Matrix4 View {set; get;}
+    public Matrix4 Projection { set; get; }
+    public Matrix4 View { set; get; }
+
+    // DODANO: Publiczny getter do pozycji kamery potrzebny w Program.cs
+    public Vector3 Position => _position;
 
     private float _near = 0.01f;
     private float _far = 1000.0f;
@@ -37,8 +40,8 @@ public class Camera
         forward.Z = -MathF.Cos(_yaw) * MathF.Cos(_pitch);
         
         _front = Vector3.Normalize(forward);
-        _right = Vector3.Normalize(Vector3.Cross(Vector3.UnitY, _front));
-        _up = Vector3.Normalize(Vector3.Cross(_front, _right));
+        _right = Vector3.Normalize(Vector3.Cross(_front, Vector3.UnitY)); // Przy okazji: poprawiony cross-product (prawoskrętny)
+        _up = Vector3.Normalize(Vector3.Cross(_right, _front));
         
         this.View = Matrix4.LookAt(_position, _position + _front, _up);
     }
@@ -49,7 +52,7 @@ public class Camera
         _pitch -= delta.Y;
 
         _yaw = MathHelper.NormalizeRadians(_yaw);
-        _pitch = float.Clamp(_pitch, -1.5f, 1.5f);
+        _pitch = float.Clamp(_pitch, -1.48f, 1.48f);
 
         Update();
     }
@@ -57,10 +60,7 @@ public class Camera
     public void Move(Vector3 move)
     {
         Vector3 direction = (move.X * _right) + (move.Y * _up) + (move.Z * _front);
-
         _position += direction;
-
         Update();
     }
-    
 }

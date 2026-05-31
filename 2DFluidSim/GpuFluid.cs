@@ -1,4 +1,5 @@
 ﻿using ILGPU;
+using ILGPU.Runtime;
 using OpenTK.Mathematics;
 
 namespace _2DFluidSim;
@@ -195,4 +196,43 @@ public static class FluidKernels
 
         particles[index] = p;
     }
+    // Używamy jawnego Stride3D.Dense, aby dopasować sygnaturę do alokacji z Program.cs
+    public static void ClearVolumeKernel(Index3D index, ArrayView3D<float, Stride3D.DenseXY> volume)
+    {
+        // Teraz kompilator wie, że volume przechowuje konkretnie float, a nie generyczne 'T'
+        volume[index] = 0.0f;
+    }
+
+    // --- POPRAWIONY KERNEL AKUMULACJI GĘSTOŚCI ---
+    public static void PopulateVolumeKernel(
+        Index1D index,
+        ArrayView<GpuParticle> particles,
+        ArrayView3D<float, Stride3D.DenseXY> volume,
+        FluidConfig config,
+        int resX, int resY, int resZ)
+    {
+        Vector3 pPos = particles[index].Position;
+        
+        // Mapowanie pozycji świata do przestrzeni tekstury [0, 1]
+        float normX = (pPos.X - config.MinX) / (config.MaxX - config.MinX);
+        float normY = (pPos.Y - config.MinY) / (config.MaxY - config.MinY);
+        float normZ = (pPos.Z - config.MinZ) / (config.MaxZ - config.MinZ);
+
+        if (normX < 0f || normX > 1f || normY < 0f || normY > 1f || normZ < 0f || normZ > 1f) return;
+
+        int vX = (int)(normX * (resX - 1));
+        int vY = (int)(normY * (resY - 1));
+        int vZ = (int)(normZ * (resZ - 1));
+
+        // Zabezpieczenie przed wyjściem poza indeksy tablicy (indeksowanie 3D)
+        Index3D volumeIndex = new Index3D(vX, vY, vZ);
+
+        // Wyciągamy referencję do konkretnej komórki typu float
+        ref float voxelRef = ref volume[volumeIndex];
+
+        // Ponieważ kompilator wie, że voxelRef to 'float', Atomic.Add(ref float, float) dopasuje się idealnie
+        Atomic.Add(ref voxelRef, particles[index].Density * 0.05f);
+    }
+    
+    // Reszta Twoich kerneli SPH (ComputeDensityKernel, UpdatePositionsKernel)...
 }

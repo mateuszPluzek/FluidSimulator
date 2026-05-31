@@ -15,18 +15,23 @@ class Program
 {
     private static int screenHeight = 720;
     private static int screenWidth = 1280;
-    private static int particleAmount = 8000; 
+    private static int particleAmount = 1000; 
     
     private static float smoothingRadius = 0.5f;
     private static float densityKernelVolumeScale;
     private static float pressureKernelScale;
     private static float viscosityKernelVolume;
     
-    public static float targetDensity = 15.0f;
+    public static float targetDensity = 90.0f;
     public static float pressureMultiplier = 0.7f;
     public static float viscosityStrength = 0.045f;
 
     private const int CELL_MAX_CAPACITY = 64;
+
+    // --- ROZDZIELCZOŚĆ TEKSTURY 3D DLA RAYMARCHINGU ---
+    private static int volumeResX = 64;
+    private static int volumeResY = 64;
+    private static int volumeResZ = 64;
 
     static void Main()
     {
@@ -41,7 +46,7 @@ class Program
         
         Toolkit.Window.SetMode(window, WindowMode.Normal);
         Toolkit.Window.SetSize(window, new Vector2i(screenWidth, screenHeight));
-        Toolkit.Window.SetTitle(window, "3D Fluid Sim - Method 1 (No-Alloc Zero-Unsafe Bridge)");
+        Toolkit.Window.SetTitle(window, "3D Fluid Sim - Raymarching Density Field");
         GL.Viewport(0, 0, screenWidth, screenHeight);
 
         // --- Cuda Setup ---
@@ -49,6 +54,7 @@ class Program
         var device = cudaContext.GetCudaDevice(0);
         using var accelerator = device.CreateAccelerator(cudaContext);
         
+        // Ładowanie kerneli fizycznych
         var densityKernel = accelerator.LoadAutoGroupedStreamKernel<
             Index1D, ArrayView<GpuParticle>, ArrayView<int>, ArrayView<int>, int, FluidConfig
         >(FluidKernels.ComputeDensityKernel);
@@ -56,6 +62,15 @@ class Program
         var positionKernel = accelerator.LoadAutoGroupedStreamKernel<
             Index1D, ArrayView<GpuParticle>, ArrayView<int>, ArrayView<int>, int, FluidConfig, float
         >(FluidKernels.UpdatePositionsKernel);
+
+        // POPRAWKA: Dodanie Stride3D.Dense do sygnatury ładowania kerneli, aby pasowało do GpuFluid.cs
+        var clearVolumeKernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index3D, ArrayView3D<float, Stride3D.DenseXY>
+        >(FluidKernels.ClearVolumeKernel);
+
+        var populateVolumeKernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<GpuParticle>, ArrayView3D<float, Stride3D.DenseXY>, FluidConfig, int, int, int
+        >(FluidKernels.PopulateVolumeKernel);
 
         float r = smoothingRadius;
         densityKernelVolumeScale = 10f / (Single.Pi * float.Pow(r, 5));
@@ -112,10 +127,21 @@ class Program
         
         // --- Objects & Grid Config ---
         BoundingBox3D box = new BoundingBox3D(-3.5f, 3.5f, -3.0f, 3.0f, -4.0f, 4.0f);
-        Vector3[] boxVertices = {
-            new(-3.5f, -3.0f, -4.0f), new(3.5f, -3.0f, -4.0f), new(3.5f, -3.0f, 4.0f), new(-3.5f, -3.0f, 4.0f), new(-3.5f, -3.0f, -4.0f),
-            new(-3.5f, 3.0f, -4.0f),  new(3.5f, 3.0f, -4.0f),  new(3.5f, 3.0f, 4.0f),  new(-3.5f, 3.0f, 4.0f),  new(-3.5f, 3.0f, -4.0f),
-            new(3.5f, 3.0f, -4.0f),   new(3.5f, -3.0f, -4.0f), new(3.5f, -3.0f, 4.0f),  new(3.5f, 3.0f, 4.0f),   new(-3.5f, 3.0f, 4.0f),  new(-3.5f, -3.0f, 4.0f)
+        
+        // Pełne wielokąty (36 wierzchołków) dla Bounding Boxa jako bryły 3D do raymarchingu
+        float[] solidBoxVertices = {
+            // Tył
+            -3.5f, -3.0f, -4.0f,  3.5f, -3.0f, -4.0f,  3.5f,  3.0f, -4.0f,  3.5f,  3.0f, -4.0f, -3.5f,  3.0f, -4.0f, -3.5f, -3.0f, -4.0f,
+            // Przód
+            -3.5f, -3.0f,  4.0f,  3.5f, -3.0f,  4.0f,  3.5f,  3.0f,  4.0f,  3.5f,  3.0f,  4.0f, -3.5f,  3.0f,  4.0f, -3.5f, -3.0f,  4.0f,
+            // Lewo
+            -3.5f,  3.0f,  4.0f, -3.5f,  3.0f, -4.0f, -3.5f, -3.0f, -4.0f, -3.5f, -3.0f, -4.0f, -3.5f, -3.0f,  4.0f, -3.5f,  3.0f,  4.0f,
+            // Prawo
+             3.5f,  3.0f,  4.0f,  3.5f,  3.0f, -4.0f,  3.5f, -3.0f, -4.0f,  3.5f, -3.0f, -4.0f,  3.5f, -3.0f,  4.0f,  3.5f,  3.0f,  4.0f,
+            // Dół
+            -3.5f, -3.0f, -4.0f,  3.5f, -3.0f, -4.0f,  3.5f, -3.0f,  4.0f,  3.5f, -3.0f,  4.0f, -3.5f, -3.0f,  4.0f, -3.5f, -3.0f, -4.0f,
+            // Góra
+            -3.5f,  3.0f, -4.0f,  3.5f,  3.0f, -4.0f,  3.5f,  3.0f,  4.0f,  3.5f,  3.0f,  4.0f, -3.5f,  3.0f,  4.0f, -3.5f,  3.0f, -4.0f
         };
 
         Vector3 gridMin = new Vector3(box.MinX - 0.5f, box.MinY - 0.5f, box.MinZ - 0.5f);
@@ -146,83 +172,57 @@ class Program
         using MemoryBuffer1D<int, Stride1D.Dense> gpuGridParticles = accelerator.Allocate1D<int>(hostGridParticles.Length);
         using MemoryBuffer1D<int, Stride1D.Dense> gpuCellCounts = accelerator.Allocate1D<int>(hostCellCounts.Length);
 
-        // --- ALOKACJA BUFORA PO STRONIE ILGPU ---
+        // Alokacja buforów cząsteczek na GPU
         using MemoryBuffer1D<GpuParticle, Stride1D.Dense> gpuParticlesBuffer = accelerator.Allocate1D<GpuParticle>(particleAmount);
         gpuParticlesBuffer.CopyFromCPU(hostParticles);
-
         ArrayView<GpuParticle> mainBufferView = gpuParticlesBuffer.View;
-        
-        int particleStructSize = Marshal.SizeOf<GpuParticle>();
-        int totalBufferSizeInBytes = particleAmount * particleStructSize;
 
-        // --- INICJALIZACJA OPENGL VBO ---
-        int particleVbo = GL.GenBuffer();
-        GL.BindBuffer(BufferTarget.ArrayBuffer, particleVbo);
-        GL.BufferData(BufferTarget.ArrayBuffer, totalBufferSizeInBytes, IntPtr.Zero, BufferUsage.StreamDraw);
+        // --- ALOKACJA STRUKTUR DLA TEKSTURY WOLUMETRYCZNEJ (ILGPU) ---
+        using MemoryBuffer3D<float, Stride3D.DenseXY> gpuVolumeBuffer = accelerator.Allocate3DDenseXY<float>(new Index3D(volumeResX, volumeResY, volumeResZ));
+        float[] hostVolumeGrid = new float[volumeResX * volumeResY * volumeResZ];
 
-        var sphereData = GenerateSphere(1.0f, 8, 8);
-        Vector3[] vertices = sphereData.Vertices;
-        uint[] indices = sphereData.Indices;
+        // --- INICJALIZACJA SHADERA RAYMARCHINGU ---
+        VolumeShader volumeShader = new VolumeShader();
+        volumeShader.Setup();
         
-        ParticleShader particleShader = new ParticleShader();
-        particleShader.Setup();
-        BoundShader boundShader = new BoundShader();
-        boundShader.Setup();
-        
-        GL.ClearColor(0.05f, 0.05f, 0.08f, 1.0f);
+        GL.ClearColor(0.02f, 0.02f, 0.04f, 1.0f);
         GL.Enable(EnableCap.DepthTest);
-
-        int particleVao = GL.GenVertexArray();
-        int boundVao = GL.GenVertexArray();
-        int sphereVbo = GL.GenBuffer();
-        int boundVbo = GL.GenBuffer();
-        int particleEbo = GL.GenBuffer();
-
-        // Konfiguracja Instanced Renderingu w VAO
-        GL.BindVertexArray(particleVao);
         
-        GL.BindBuffer(BufferTarget.ArrayBuffer, sphereVbo);
-        GL.BufferData(BufferTarget.ArrayBuffer, vertices.Length * Vector3.SizeInBytes, vertices, BufferUsage.StaticDraw);
+        // Aktywacja Blendingu (niezbędne do przezroczystości w Raymarchingu)
+        GL.Enable(EnableCap.Blend);
+        GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+
+        // VAO i VBO dla Sześcianu Wolumetrycznego (Raymarching Box)
+        int boundVaoSolid = GL.GenVertexArray();
+        int boundVboSolid = GL.GenBuffer();
+        
+        GL.BindVertexArray(boundVaoSolid);
+        GL.BindBuffer(BufferTarget.ArrayBuffer, boundVboSolid);
+        GL.BufferData(BufferTarget.ArrayBuffer, solidBoxVertices.Length * sizeof(float), solidBoxVertices, BufferUsage.StaticDraw);
         GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, sizeof(float) * 3, 0);
         GL.EnableVertexAttribArray(0);
 
-        GL.BindBuffer(BufferTarget.ArrayBuffer, particleVbo);
+        // --- POPRAWKA: Zmiana z Texture3D na Texture3d ---
+        int volumeTexture = GL.GenTexture();
+        GL.BindTexture(TextureTarget.Texture3d, volumeTexture);
+        GL.TexImage3D(TextureTarget.Texture3d, 0, InternalFormat.R32f, volumeResX, volumeResY, volumeResZ, 0, PixelFormat.Red, PixelType.Float, IntPtr.Zero);
         
-        // GpuParticle.Position (offset = 0)
-        GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, particleStructSize, 0);
-        GL.EnableVertexAttribArray(1);
-        GL.VertexAttribDivisor(1, 1);
+        GL.TexParameteri(TextureTarget.Texture3d, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
+        GL.TexParameteri(TextureTarget.Texture3d, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+        GL.TexParameteri(TextureTarget.Texture3d, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+        GL.TexParameteri(TextureTarget.Texture3d, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+        GL.TexParameteri(TextureTarget.Texture3d, TextureParameterName.TextureWrapR, (int)TextureWrapMode.ClampToEdge);
 
-        // GpuParticle.Velocity (offset = 12 bajtów)
-        GL.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, particleStructSize, 12);
-        GL.EnableVertexAttribArray(2);
-        GL.VertexAttribDivisor(2, 1);
-
-        GL.BindBuffer(BufferTarget.ElementArrayBuffer, particleEbo);
-        GL.BufferData(BufferTarget.ElementArrayBuffer, indices.Length * sizeof(uint), indices, BufferUsage.StaticDraw);
-
-        // Bounding Box
-        GL.BindVertexArray(boundVao);
-        GL.BindBuffer(BufferTarget.ArrayBuffer, boundVbo);
-        GL.BufferData(BufferTarget.ArrayBuffer, boxVertices.Length * Vector3.SizeInBytes, boxVertices, BufferUsage.StaticDraw);
-        GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, sizeof(float) * 3, 0);
-        GL.EnableVertexAttribArray(0);
-
-        Matrix4 identity = Matrix4.Identity;
-        int viewUniformParticle = GL.GetUniformLocation(particleShader.Id, "view");
-        int projectionUniformParticle = GL.GetUniformLocation(particleShader.Id, "projection");
-        int viewUniformBound = GL.GetUniformLocation(boundShader.Id, "view");
-        int projectionUniformBound = GL.GetUniformLocation(boundShader.Id, "projection");
-        int modelUniformBound = GL.GetUniformLocation(boundShader.Id, "model");
-        
         Stopwatch stopwatch = new Stopwatch();
         Stopwatch frameTimer = new Stopwatch();
         stopwatch.Start();
         float lastTime = 0f;
         float titleUpdateTimer = 0f;
+        
         Index1D gridExtent = new Index1D(particleAmount);
+        Index3D volumeExtent = new Index3D(volumeResX, volumeResY, volumeResZ);
 
-        // Stały bufor synchronizacyjny na CPU – alokowany RAZ, wielokrotnie używany
+        // Reużywalna tablica synchronizacyjna dla siatki przestrzennej na CPU
         GpuParticle[] tempCpuSyncArray = new GpuParticle[particleAmount];
 
         while (true)
@@ -234,10 +234,9 @@ class Program
 
             frameTimer.Restart();
 
-            // --- KROK 1: ŚCIĄGNIĘCIE DANYCH DO REUZYWALNEJ TABLICY ---
+            // --- KROK 1: ŚCIĄGNIĘCIE DANYCH DO PRZELICZENIA SIATKI ---
             mainBufferView.CopyToCPU(tempCpuSyncArray);
 
-            // Przeliczanie siatki przestrzennej na CPU przy użyciu tej samej tablicy
             Array.Clear(hostCellCounts, 0, hostCellCounts.Length);
             for (int i = 0; i < particleAmount; i++)
             {
@@ -268,31 +267,50 @@ class Program
                 GridDimensions = gridDimensions, GridMin = gridMin
             };
 
-            // Wykonanie fizyki w pamięci GPU
+            // Uruchomienie fizyki płynu
             densityKernel(gridExtent, mainBufferView, gpuGridParticles.View, gpuCellCounts.View, CELL_MAX_CAPACITY, config);
             positionKernel(gridExtent, mainBufferView, gpuGridParticles.View, gpuCellCounts.View, CELL_MAX_CAPACITY, config, dt);
             
-            // Konieczna synchronizacja przed przesłaniem danych do renderu
+            // --- GENEROWANIE POLA GĘSTOŚCI DLA RAYMARCHINGU (GPU) ---
+            clearVolumeKernel(volumeExtent, gpuVolumeBuffer.View);
+            populateVolumeKernel(gridExtent, mainBufferView, gpuVolumeBuffer.View, config, volumeResX, volumeResY, volumeResZ);
+
             accelerator.Synchronize();
+            
+            // Pobranie wygenerowanej siatki voxelowej gęstości do RAM...
+            gpuVolumeBuffer.View.BaseView.CopyToCPU(hostVolumeGrid);
 
-            // --- KROK 2: METODA 1 – REUZYWALNA TABLICA TRAFIA DO OPENGL ---
-            // Ponieważ dane z GPU zostały zaktualizowane, musimy ponownie pobrać stan końcowy fizyki do naszej tablicy...
-            mainBufferView.CopyToCPU(tempCpuSyncArray);
+            // --- POPRAWKA: Zmiana z Texture3D na Texture3d ---
+            GL.BindTexture(TextureTarget.Texture3d, volumeTexture);
+            GL.TexSubImage3D(TextureTarget.Texture3d, 0, 0, 0, 0, volumeResX, volumeResY, volumeResZ, PixelFormat.Red, PixelType.Float, hostVolumeGrid);
 
-            // ...i natychmiast wysłać ją bezpośrednio do VBO OpenGL bez żadnych dodatkowych alokacji w pętli!
-            GL.BindBuffer(BufferTarget.ArrayBuffer, particleVbo);
-            GL.BufferSubData(BufferTarget.ArrayBuffer, IntPtr.Zero, totalBufferSizeInBytes, tempCpuSyncArray);
-
-            // --- RENDEROWANIE ---
+            // --- RENDEROWANIE WOLUMETRYCZNE ---
             GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
-            particleShader.Use();
-            GL.BindVertexArray(particleVao);
-            
-            GL.UniformMatrix4f(projectionUniformParticle, 1, false, camera.Projection);
-            GL.UniformMatrix4f(viewUniformParticle, 1, false, camera.View);
+            // Aby móc renderować wnętrze kostki, kiedy kamera w nią wjedzie, wyłączamy wycinanie ścian (Culling)
+            GL.Disable(EnableCap.CullFace);
 
-            GL.DrawElementsInstanced(PrimitiveType.Triangles, indices.Length, DrawElementsType.UnsignedInt, IntPtr.Zero, particleAmount);
+            volumeShader.Use();
+            GL.BindVertexArray(boundVaoSolid);
+            
+            GL.UniformMatrix4f(GL.GetUniformLocation(volumeShader.Id, "projection"), 1, false, camera.Projection);
+            GL.UniformMatrix4f(GL.GetUniformLocation(volumeShader.Id, "view"), 1, false, camera.View);
+            
+            Matrix4 identity = Matrix4.Identity;
+            GL.UniformMatrix4f(GL.GetUniformLocation(volumeShader.Id, "model"), 1, false, ref identity);
+
+            // Przekazanie wektorów pozycji i granic świata
+            GL.Uniform3f(GL.GetUniformLocation(volumeShader.Id, "cameraPos"), camera.Position.X, camera.Position.Y, camera.Position.Z);
+            GL.Uniform3f(GL.GetUniformLocation(volumeShader.Id, "boxMin"), box.MinX, box.MinY, box.MinZ);
+            GL.Uniform3f(GL.GetUniformLocation(volumeShader.Id, "boxMax"), box.MaxX, box.MaxY, box.MaxZ);
+
+            // --- POPRAWKA: Zmiana z Texture3D na Texture3d ---
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.BindTexture(TextureTarget.Texture3d, volumeTexture);
+            GL.Uniform1i(GL.GetUniformLocation(volumeShader.Id, "volumeTex"), 0);
+
+            // Rysowanie sześcianu jako pełnej bryły wolumetrycznej
+            GL.DrawArrays(PrimitiveType.Triangles, 0, 36);
 
             frameTimer.Stop();
             double frameTimeMs = frameTimer.Elapsed.TotalMilliseconds;
@@ -301,28 +319,20 @@ class Program
             titleUpdateTimer += dt;
             if (titleUpdateTimer >= 0.1f)
             {
-                Toolkit.Window.SetTitle(window, $"Frame Total: {frameTimeMs:F2} ms | FPS: {instantFps:F0}");
-                Console.WriteLine($"Frame Total: {frameTimeMs:F2} ms | FPS: {instantFps:F0}");
+                Toolkit.Window.SetTitle(window, $"Volume Frame Total: {frameTimeMs:F2} ms | FPS: {instantFps:F0}");
                 titleUpdateTimer = 0f;
             }
-
-            // Renderowanie Bounding Boxa
-            boundShader.Use();
-            GL.BindVertexArray(boundVao);
-            GL.UniformMatrix4f(projectionUniformBound, 1, false, camera.Projection);
-            GL.UniformMatrix4f(viewUniformBound, 1, false, camera.View);
-            GL.UniformMatrix4f(modelUniformBound, 1, false, ref identity);
-            GL.DrawArrays(PrimitiveType.LineStrip, 0, boxVertices.Length);
             
             Toolkit.OpenGL.SwapBuffers(context);
 
+            // --- Obsługa Sterowania (Poprawione Osie Ruchu) ---
             Vector3 moveDirection = Vector3.Zero;
-            if (keysPressed[Scancode.W]) moveDirection += new Vector3(0f, 0f, 1f);
-            if (keysPressed[Scancode.S]) moveDirection += new Vector3(0f, 0f, -1f);
-            if (keysPressed[Scancode.D]) moveDirection += new Vector3(-1f, 0f, 0f);
-            if (keysPressed[Scancode.A]) moveDirection += new Vector3(1f, 0f, 0f);
-            if (keysPressed[Scancode.Q]) moveDirection += new Vector3(0f, 1f, 0f);
-            if (keysPressed[Scancode.E]) moveDirection += new Vector3(0f, -1f, 0f);
+            if (keysPressed[Scancode.W]) moveDirection += new Vector3(0f, 0f, 1f);  // Przód
+            if (keysPressed[Scancode.S]) moveDirection += new Vector3(0f, 0f, -1f); // Tył
+            if (keysPressed[Scancode.D]) moveDirection += new Vector3(1f, 0f, 0f);  // Prawo
+            if (keysPressed[Scancode.A]) moveDirection += new Vector3(-1f, 0f, 0f); // Lewo
+            if (keysPressed[Scancode.Q]) moveDirection += new Vector3(0f, 1f, 0f);  // Góra
+            if (keysPressed[Scancode.E]) moveDirection += new Vector3(0f, -1f, 0f); // Dół
 
             if (moveDirection != Vector3.Zero) camera.Move(moveDirection * (4.0f * dt));
 
@@ -330,43 +340,9 @@ class Program
             if (Toolkit.Window.IsWindowDestroyed(window)) break;
         }
 
-        GL.DeleteBuffer(particleVbo);
-        GL.DeleteBuffer(sphereVbo);
-    }
-    
-    static (Vector3[] Vertices, uint[] Indices) GenerateSphere(float radius, int sectors = 8, int rings = 8)
-    {
-        List<Vector3> vertices = new List<Vector3>();
-        List<uint> indices = new List<uint>();
-        float sectorStep = 2 * MathF.PI / sectors;
-        float ringStep = MathF.PI / rings;
-
-        for (int i = 0; i <= rings; ++i)
-        {
-            float ringAngle = MathF.PI / 2 - i * ringStep;
-            float xy = radius * MathF.Cos(ringAngle);
-            float z = radius * MathF.Sin(ringAngle);
-
-            for (int j = 0; j <= sectors; ++j)
-            {
-                float sectorAngle = j * sectorStep;
-                float x = xy * MathF.Cos(sectorAngle);
-                float y = xy * MathF.Sin(sectorAngle);
-                vertices.Add(new Vector3(x, y, z));
-            }
-        }
-
-        for (int i = 0; i < rings; ++i)
-        {
-            uint k1 = (uint)(i * (sectors + 1));
-            uint k2 = (uint)(k1 + sectors + 1);
-
-            for (int j = 0; j < sectors; ++j, ++k1, ++k2)
-            {
-                if (i != 0) { indices.Add(k1); indices.Add(k2); indices.Add(k1 + 1); }
-                if (i != (rings - 1)) { indices.Add(k1 + 1); indices.Add(k2); indices.Add(k2 + 1); }
-            }
-        }
-        return (vertices.ToArray(), indices.ToArray());
+        GL.DeleteBuffer(boundVboSolid);
+        GL.DeleteVertexArray(boundVaoSolid);
+        // POPRAWKA: Zmiana z Texture3D na Texture3d przy usuwaniu
+        GL.DeleteTexture(volumeTexture);
     }
 }
