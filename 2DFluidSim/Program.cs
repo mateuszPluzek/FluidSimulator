@@ -15,7 +15,7 @@ class Program
 {
     private static int screenHeight = 720;
     private static int screenWidth = 1280;
-    private static int particleAmount = 4000; 
+    private static int particleAmount = 16000; 
     
     private static float smoothingRadius = 0.5f;
     private static float densityKernelVolumeScale;
@@ -162,7 +162,7 @@ class Program
         ArrayView<GpuParticle> mainBufferView = gpuParticlesBuffer.View;
 
         // --- Konfiguracja i alokacja struktur Marching Cubes ---
-        Vector3i mcResolution = new Vector3i(64, 64, 64); 
+        Vector3i mcResolution = new Vector3i(32, 32, 32); 
         McConfig mcConfig = new McConfig {
             GridMin = new Vector3(box.MinX - 0.1f, box.MinY - 0.1f, box.MinZ - 0.1f),
             GridMax = new Vector3(box.MaxX + 0.1f, box.MaxY + 0.1f, box.MaxZ + 0.1f),
@@ -332,6 +332,7 @@ class Program
             if (titleUpdateTimer >= 0.1f)
             {
                 Toolkit.Window.SetTitle(window, $"Triangles: {generatedVerticesCount / 3} | Total Frame: {frameTimeMs:F2} ms | FPS: {instantFps:F0}");
+                Console.WriteLine($"Triangles: {generatedVerticesCount / 3} | Total Frame: {frameTimeMs:F2} ms | FPS: {instantFps:F0}");
                 titleUpdateTimer = 0f;
             }
 
