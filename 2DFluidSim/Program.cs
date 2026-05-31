@@ -1,4 +1,4 @@
-﻿using OpenTK.Mathematics;
+﻿﻿using OpenTK.Mathematics;
 using OpenTK.Platform;
 using OpenTK.Graphics.OpenGL;
 using System.Diagnostics;
@@ -15,7 +15,7 @@ class Program
 {
     private static int screenHeight = 720;
     private static int screenWidth = 1280;
-    private static int particleAmount = 2000; 
+    private static int particleAmount = 4000; 
     
     private static float smoothingRadius = 0.5f;
     private static float densityKernelVolumeScale;

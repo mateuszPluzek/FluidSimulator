@@ -12,8 +12,11 @@ public class Camera
     private Vector3 _up = Vector3.UnitY;
     private Vector3 _right = Vector3.UnitX;
     
-    public Matrix4 Projection {set; get;}
-    public Matrix4 View {set; get;}
+    public Matrix4 Projection { get; set; }
+    public Matrix4 View { get; set; }
+    
+    // Dodana właściwość Position
+    public Vector3 Position => _position;
 
     private float _near = 0.01f;
     private float _far = 1000.0f;
@@ -62,5 +65,4 @@ public class Camera
 
         Update();
     }
-    
 }
