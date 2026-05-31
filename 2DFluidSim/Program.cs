@@ -15,7 +15,7 @@ class Program
 {
     private static int screenHeight = 720;
     private static int screenWidth = 1280;
-    private static int particleAmount = 8000; 
+    private static int particleAmount = 2000; 
     
     private static float smoothingRadius = 0.5f;
     private static float densityKernelVolumeScale;
@@ -41,14 +41,15 @@ class Program
         
         Toolkit.Window.SetMode(window, WindowMode.Normal);
         Toolkit.Window.SetSize(window, new Vector2i(screenWidth, screenHeight));
-        Toolkit.Window.SetTitle(window, "3D Fluid Sim - Method 1 (No-Alloc Zero-Unsafe Bridge)");
+        Toolkit.Window.SetTitle(window, "3D Fluid Sim - Marching Cubes GPU Mesh");
         GL.Viewport(0, 0, screenWidth, screenHeight);
 
-        // --- Cuda Setup ---
+        // --- Cuda / ILGPU Setup ---
         using var cudaContext = Context.Create(builder => builder.Cuda());
         var device = cudaContext.GetCudaDevice(0);
         using var accelerator = device.CreateAccelerator(cudaContext);
         
+        // Kernele Fizyki SPH
         var densityKernel = accelerator.LoadAutoGroupedStreamKernel<
             Index1D, ArrayView<GpuParticle>, ArrayView<int>, ArrayView<int>, int, FluidConfig
         >(FluidKernels.ComputeDensityKernel);
@@ -56,6 +57,15 @@ class Program
         var positionKernel = accelerator.LoadAutoGroupedStreamKernel<
             Index1D, ArrayView<GpuParticle>, ArrayView<int>, ArrayView<int>, int, FluidConfig, float
         >(FluidKernels.UpdatePositionsKernel);
+
+        // Kernele Marching Cubes
+        var scalarFieldGridKernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index3D, ArrayView3D<float, Stride3D.DenseXY>, ArrayView<GpuParticle>, FluidConfig, McConfig
+        >(MarchingCubesKernels.ComputeScalarFieldKernel);
+
+        var marchingCubesKernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index3D, ArrayView3D<float, Stride3D.DenseXY>, ArrayView<McVertex>, ArrayView<int>, ArrayView<int>, McConfig
+        >(MarchingCubesKernels.MarchCubesKernel);
 
         float r = smoothingRadius;
         densityKernelVolumeScale = 10f / (Single.Pi * float.Pow(r, 5));
@@ -146,71 +156,63 @@ class Program
         using MemoryBuffer1D<int, Stride1D.Dense> gpuGridParticles = accelerator.Allocate1D<int>(hostGridParticles.Length);
         using MemoryBuffer1D<int, Stride1D.Dense> gpuCellCounts = accelerator.Allocate1D<int>(hostCellCounts.Length);
 
-        // --- ALOKACJA BUFORA PO STRONIE ILGPU ---
         using MemoryBuffer1D<GpuParticle, Stride1D.Dense> gpuParticlesBuffer = accelerator.Allocate1D<GpuParticle>(particleAmount);
         gpuParticlesBuffer.CopyFromCPU(hostParticles);
 
         ArrayView<GpuParticle> mainBufferView = gpuParticlesBuffer.View;
-        
-        int particleStructSize = Marshal.SizeOf<GpuParticle>();
-        int totalBufferSizeInBytes = particleAmount * particleStructSize;
 
-        // --- INICJALIZACJA OPENGL VBO ---
-        int particleVbo = GL.GenBuffer();
-        GL.BindBuffer(BufferTarget.ArrayBuffer, particleVbo);
-        GL.BufferData(BufferTarget.ArrayBuffer, totalBufferSizeInBytes, IntPtr.Zero, BufferUsage.StreamDraw);
+        // --- Konfiguracja i alokacja struktur Marching Cubes ---
+        Vector3i mcResolution = new Vector3i(64, 64, 64); 
+        McConfig mcConfig = new McConfig {
+            GridMin = new Vector3(box.MinX - 0.1f, box.MinY - 0.1f, box.MinZ - 0.1f),
+            GridMax = new Vector3(box.MaxX + 0.1f, box.MaxY + 0.1f, box.MaxZ + 0.1f),
+            Resolution = mcResolution,
+            IsoLevel = 8.5f, 
+            VoxelSize = new Vector3(
+                (box.MaxX - box.MinX + 0.2f) / (mcResolution.X - 1),
+                (box.MaxY - box.MinY + 0.2f) / (mcResolution.Y - 1),
+                (box.MaxZ - box.MinZ + 0.2f) / (mcResolution.Z - 1)
+            )
+        };
 
-        var sphereData = GenerateSphere(1.0f, 8, 8);
-        Vector3[] vertices = sphereData.Vertices;
-        uint[] indices = sphereData.Indices;
-        
-        ParticleShader particleShader = new ParticleShader();
-        particleShader.Setup();
+        int maxTriangles = mcResolution.X * mcResolution.Y * mcResolution.Z * 5; 
+        using var dScalarField = accelerator.Allocate3DDenseXY<float>(new LongIndex3D(mcResolution.X, mcResolution.Y, mcResolution.Z));
+        using var dAppendCounter = accelerator.Allocate1D<int>(1);
+        using var dOutVertices = accelerator.Allocate1D<McVertex>(maxTriangles * 3);
+        using var dTriTable = accelerator.Allocate1D<int>(MarchingCubesTables.TriTable);
+
+        // --- Inicjalizacja OpenGL ---
+        FluidSurfaceShader liquidShader = new FluidSurfaceShader();
+        liquidShader.Setup();
         BoundShader boundShader = new BoundShader();
         boundShader.Setup();
         
         GL.ClearColor(0.05f, 0.05f, 0.08f, 1.0f);
         GL.Enable(EnableCap.DepthTest);
 
-        int particleVao = GL.GenVertexArray();
+        // VAO i VBO dla Bounding Boxa
         int boundVao = GL.GenVertexArray();
-        int sphereVbo = GL.GenBuffer();
         int boundVbo = GL.GenBuffer();
-        int particleEbo = GL.GenBuffer();
-
-        // Konfiguracja Instanced Renderingu w VAO
-        GL.BindVertexArray(particleVao);
-        
-        GL.BindBuffer(BufferTarget.ArrayBuffer, sphereVbo);
-        GL.BufferData(BufferTarget.ArrayBuffer, vertices.Length * Vector3.SizeInBytes, vertices, BufferUsage.StaticDraw);
-        GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, sizeof(float) * 3, 0);
-        GL.EnableVertexAttribArray(0);
-
-        GL.BindBuffer(BufferTarget.ArrayBuffer, particleVbo);
-        
-        // GpuParticle.Position (offset = 0)
-        GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, particleStructSize, 0);
-        GL.EnableVertexAttribArray(1);
-        GL.VertexAttribDivisor(1, 1);
-
-        // GpuParticle.Velocity (offset = 12 bajtów)
-        GL.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, particleStructSize, 12);
-        GL.EnableVertexAttribArray(2);
-        GL.VertexAttribDivisor(2, 1);
-
-        GL.BindBuffer(BufferTarget.ElementArrayBuffer, particleEbo);
-        GL.BufferData(BufferTarget.ElementArrayBuffer, indices.Length * sizeof(uint), indices, BufferUsage.StaticDraw);
-
-        // Bounding Box
         GL.BindVertexArray(boundVao);
         GL.BindBuffer(BufferTarget.ArrayBuffer, boundVbo);
         GL.BufferData(BufferTarget.ArrayBuffer, boxVertices.Length * Vector3.SizeInBytes, boxVertices, BufferUsage.StaticDraw);
         GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, sizeof(float) * 3, 0);
         GL.EnableVertexAttribArray(0);
 
+        // VAO i VBO dla Wygenerowanego Mesha Cieczy (Marching Cubes)
+        int liquidVao = GL.GenVertexArray();
+        int liquidVbo = GL.GenBuffer();
+        GL.BindVertexArray(liquidVao);
+        GL.BindBuffer(BufferTarget.ArrayBuffer, liquidVbo);
+        GL.BufferData(BufferTarget.ArrayBuffer, maxTriangles * 3 * Marshal.SizeOf<McVertex>(), IntPtr.Zero, BufferUsage.StreamDraw);
+
+        // Atrybuty wierzchołka cieczy (0: Pozycja, 1: Normalna)
+        GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, Marshal.SizeOf<McVertex>(), 0);
+        GL.EnableVertexAttribArray(0);
+        GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, Marshal.SizeOf<McVertex>(), 12);
+        GL.EnableVertexAttribArray(1);
+
         Matrix4 identity = Matrix4.Identity;
-        int viewUniformParticle = GL.GetUniformLocation(particleShader.Id, "view");
-        int projectionUniformParticle = GL.GetUniformLocation(particleShader.Id, "projection");
         int viewUniformBound = GL.GetUniformLocation(boundShader.Id, "view");
         int projectionUniformBound = GL.GetUniformLocation(boundShader.Id, "projection");
         int modelUniformBound = GL.GetUniformLocation(boundShader.Id, "model");
@@ -222,8 +224,10 @@ class Program
         float titleUpdateTimer = 0f;
         Index1D gridExtent = new Index1D(particleAmount);
 
-        // Stały bufor synchronizacyjny na CPU – alokowany RAZ, wielokrotnie używany
+        // Reużywalne tablice CPU (Zero-Allocation w pętli)
         GpuParticle[] tempCpuSyncArray = new GpuParticle[particleAmount];
+        McVertex[] hostMeshSyncArray = new McVertex[maxTriangles * 3];
+        int[] hostCounterArray = new int[1];
 
         while (true)
         {
@@ -234,10 +238,7 @@ class Program
 
             frameTimer.Restart();
 
-            // --- KROK 1: ŚCIĄGNIĘCIE DANYCH DO REUZYWALNEJ TABLICY ---
-            mainBufferView.CopyToCPU(tempCpuSyncArray);
-
-            // Przeliczanie siatki przestrzennej na CPU przy użyciu tej samej tablicy
+            // --- FIZYKA SPH ---
             Array.Clear(hostCellCounts, 0, hostCellCounts.Length);
             for (int i = 0; i < particleAmount; i++)
             {
@@ -268,45 +269,54 @@ class Program
                 GridDimensions = gridDimensions, GridMin = gridMin
             };
 
-            // Wykonanie fizyki w pamięci GPU
             densityKernel(gridExtent, mainBufferView, gpuGridParticles.View, gpuCellCounts.View, CELL_MAX_CAPACITY, config);
             positionKernel(gridExtent, mainBufferView, gpuGridParticles.View, gpuCellCounts.View, CELL_MAX_CAPACITY, config, dt);
             
-            // Konieczna synchronizacja przed przesłaniem danych do renderu
+            // --- GENEROWANIE POWIERZCHNI (MARCHING CUBES) ---
+            hostCounterArray[0] = 0;
+            dAppendCounter.CopyFromCPU(hostCounterArray);
+
+            scalarFieldGridKernel(dScalarField.Extent.ToIntIndex(), dScalarField.View, mainBufferView, config, mcConfig);
+            marchingCubesKernel(dScalarField.Extent.ToIntIndex(), dScalarField.View, dOutVertices.View, dAppendCounter.View, dTriTable.View, mcConfig);
+            
+            // Synchronizacja GPU przed renderowaniem i pobraniem struktury dla następnej klatki
             accelerator.Synchronize();
 
-            // --- KROK 2: METODA 1 – REUZYWALNA TABLICA TRAFIA DO OPENGL ---
-            // Ponieważ dane z GPU zostały zaktualizowane, musimy ponownie pobrać stan końcowy fizyki do naszej tablicy...
+            // Pobranie danych cząstek na potrzeby generowania struktury przestrzennej w kolejnej klatce
             mainBufferView.CopyToCPU(tempCpuSyncArray);
 
-            // ...i natychmiast wysłać ją bezpośrednio do VBO OpenGL bez żadnych dodatkowych alokacji w pętli!
-            GL.BindBuffer(BufferTarget.ArrayBuffer, particleVbo);
-            GL.BufferSubData(BufferTarget.ArrayBuffer, IntPtr.Zero, totalBufferSizeInBytes, tempCpuSyncArray);
+            // Pobranie wygenerowanej geometrii mesh
+            dAppendCounter.CopyToCPU(hostCounterArray);
+            int generatedVerticesCount = hostCounterArray[0];
+
+            if (generatedVerticesCount > 0)
+            {
+                dOutVertices.View.SubView(0, generatedVerticesCount).CopyToCPU(hostMeshSyncArray);
+                GL.BindBuffer(BufferTarget.ArrayBuffer, liquidVbo);
+                GL.BufferSubData(BufferTarget.ArrayBuffer, IntPtr.Zero, generatedVerticesCount * Marshal.SizeOf<McVertex>(), hostMeshSyncArray);
+            }
 
             // --- RENDEROWANIE ---
             GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
-            particleShader.Use();
-            GL.BindVertexArray(particleVao);
-            
-            GL.UniformMatrix4f(projectionUniformParticle, 1, false, camera.Projection);
-            GL.UniformMatrix4f(viewUniformParticle, 1, false, camera.View);
+            // Włączenie przezroczystości dla wody
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
 
-            GL.DrawElementsInstanced(PrimitiveType.Triangles, indices.Length, DrawElementsType.UnsignedInt, IntPtr.Zero, particleAmount);
+            // Rysowanie powierzchni cieczy
+            liquidShader.Use();
+            GL.BindVertexArray(liquidVao);
+            GL.UniformMatrix4f(GL.GetUniformLocation(liquidShader.Id, "projection"), 1, false, camera.Projection);
+            GL.UniformMatrix4f(GL.GetUniformLocation(liquidShader.Id, "view"), 1, false, camera.View);
 
-            frameTimer.Stop();
-            double frameTimeMs = frameTimer.Elapsed.TotalMilliseconds;
-            double instantFps = frameTimeMs > 0.0 ? 1000.0 / frameTimeMs : 9999.0;
-
-            titleUpdateTimer += dt;
-            if (titleUpdateTimer >= 0.1f)
+            if (generatedVerticesCount > 0)
             {
-                Toolkit.Window.SetTitle(window, $"Frame Total: {frameTimeMs:F2} ms | FPS: {instantFps:F0}");
-                Console.WriteLine($"Frame Total: {frameTimeMs:F2} ms | FPS: {instantFps:F0}");
-                titleUpdateTimer = 0f;
+                GL.DrawArrays(PrimitiveType.Triangles, 0, generatedVerticesCount);
             }
 
-            // Renderowanie Bounding Boxa
+            GL.Disable(EnableCap.Blend);
+
+            // Rysowanie Bounding Boxa
             boundShader.Use();
             GL.BindVertexArray(boundVao);
             GL.UniformMatrix4f(projectionUniformBound, 1, false, camera.Projection);
@@ -314,8 +324,20 @@ class Program
             GL.UniformMatrix4f(modelUniformBound, 1, false, ref identity);
             GL.DrawArrays(PrimitiveType.LineStrip, 0, boxVertices.Length);
             
+            frameTimer.Stop();
+            double frameTimeMs = frameTimer.Elapsed.TotalMilliseconds;
+            double instantFps = frameTimeMs > 0.0 ? 1000.0 / frameTimeMs : 9999.0;
+
+            titleUpdateTimer += dt;
+            if (titleUpdateTimer >= 0.1f)
+            {
+                Toolkit.Window.SetTitle(window, $"Triangles: {generatedVerticesCount / 3} | Total Frame: {frameTimeMs:F2} ms | FPS: {instantFps:F0}");
+                titleUpdateTimer = 0f;
+            }
+
             Toolkit.OpenGL.SwapBuffers(context);
 
+            // Obsługa klawiatury (ruch kamery)
             Vector3 moveDirection = Vector3.Zero;
             if (keysPressed[Scancode.W]) moveDirection += new Vector3(0f, 0f, 1f);
             if (keysPressed[Scancode.S]) moveDirection += new Vector3(0f, 0f, -1f);
@@ -330,43 +352,9 @@ class Program
             if (Toolkit.Window.IsWindowDestroyed(window)) break;
         }
 
-        GL.DeleteBuffer(particleVbo);
-        GL.DeleteBuffer(sphereVbo);
-    }
-    
-    static (Vector3[] Vertices, uint[] Indices) GenerateSphere(float radius, int sectors = 8, int rings = 8)
-    {
-        List<Vector3> vertices = new List<Vector3>();
-        List<uint> indices = new List<uint>();
-        float sectorStep = 2 * MathF.PI / sectors;
-        float ringStep = MathF.PI / rings;
-
-        for (int i = 0; i <= rings; ++i)
-        {
-            float ringAngle = MathF.PI / 2 - i * ringStep;
-            float xy = radius * MathF.Cos(ringAngle);
-            float z = radius * MathF.Sin(ringAngle);
-
-            for (int j = 0; j <= sectors; ++j)
-            {
-                float sectorAngle = j * sectorStep;
-                float x = xy * MathF.Cos(sectorAngle);
-                float y = xy * MathF.Sin(sectorAngle);
-                vertices.Add(new Vector3(x, y, z));
-            }
-        }
-
-        for (int i = 0; i < rings; ++i)
-        {
-            uint k1 = (uint)(i * (sectors + 1));
-            uint k2 = (uint)(k1 + sectors + 1);
-
-            for (int j = 0; j < sectors; ++j, ++k1, ++k2)
-            {
-                if (i != 0) { indices.Add(k1); indices.Add(k2); indices.Add(k1 + 1); }
-                if (i != (rings - 1)) { indices.Add(k1 + 1); indices.Add(k2); indices.Add(k2 + 1); }
-            }
-        }
-        return (vertices.ToArray(), indices.ToArray());
+        GL.DeleteBuffer(liquidVbo);
+        GL.DeleteBuffer(boundVbo);
+        GL.DeleteVertexArray(liquidVao);
+        GL.DeleteVertexArray(boundVao);
     }
 }
